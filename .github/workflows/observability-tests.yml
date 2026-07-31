@@ -1,0 +1,32 @@
+name: Observability tests
+
+on:
+  pull_request:
+    paths:
+      - "tools/observability/**"
+      - ".github/workflows/observability-tests.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "tools/observability/**"
+      - ".github/workflows/observability-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run observability unit tests
+        run: python -m unittest discover -s tools/observability/tests -v
+      - name: Validate example configuration
+        run: python tools/observability/rathena_observer.py --config tools/observability/observer.example.json --check >/tmp/rathena-metrics.txt
