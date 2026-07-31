@@ -71,20 +71,20 @@ void packet_observability_init(){
 	const char* raw_slow_ms = std::getenv( ENV_SLOW_MS );
 	state.slow_ms = packet_observability_parse_slow_ms( raw_slow_ms, slow_fallback );
 
-	if( slow_fallback ){
-		ShowWarning( "packet_observability: invalid %s value '%s', falling back to the default of %u ms.\n", ENV_SLOW_MS, raw_slow_ms != nullptr ? raw_slow_ms : "", packet_observability_default_slow_ms );
-	}
-
 	bool capacity_fallback = false;
 	const char* raw_capacity = std::getenv( ENV_MAX_PACKET_IDS );
 	state.capacity = packet_observability_parse_capacity( raw_capacity, capacity_fallback );
 
-	if( capacity_fallback ){
-		ShowWarning( "packet_observability: invalid %s value '%s', falling back to the default of %zu.\n", ENV_MAX_PACKET_IDS, raw_capacity != nullptr ? raw_capacity : "", packet_observability_default_capacity );
-	}
-
 	if( !state.enabled ){
 		return;
+	}
+
+	if( slow_fallback ){
+		ShowWarning( "packet_observability: invalid %s value '%s', falling back to the default of %u ms.\n", ENV_SLOW_MS, raw_slow_ms != nullptr ? raw_slow_ms : "", packet_observability_default_slow_ms );
+	}
+
+	if( capacity_fallback ){
+		ShowWarning( "packet_observability: invalid %s value '%s', falling back to the default of %zu.\n", ENV_MAX_PACKET_IDS, raw_capacity != nullptr ? raw_capacity : "", packet_observability_default_capacity );
 	}
 
 	// Allocate the bounded registry only when instrumentation is enabled.

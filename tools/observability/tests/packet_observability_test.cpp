@@ -383,6 +383,28 @@ void test_runtime_reset(){
 	CHECK( snapshot.packets.empty() );
 }
 
+void test_combined_render(){
+	// Simulate the core observability writer appending packet metrics after
+	// its own Prometheus exposition. Both renderers end with a single trailing
+	// newline, so the combined output must not contain blank lines.
+	packet_observability_test_reset( true, 25, 16 );
+
+	packet_observability_record_receive( 0x0064, 100 );
+	packet_observability_record_send( 0x0064, 200 );
+
+	const std::string core_metrics =
+		"# HELP rathena_core_snapshots_total Total number of core observability snapshots taken.\n"
+		"# TYPE rathena_core_snapshots_total counter\n"
+		"rathena_core_snapshots_total 1\n";
+	const std::string packet_metrics = packet_observability_render_snapshot();
+	const std::string combined = core_metrics + packet_metrics;
+
+	CHECK( !core_metrics.empty() && core_metrics.back() == '\n' );
+	CHECK( !packet_metrics.empty() && packet_metrics.back() == '\n' );
+	CHECK( combined.find( "\n\n" ) == std::string::npos );
+	CHECK( combined.find( "rathena_packet_received_packets_total" ) != std::string::npos );
+}
+
 } // namespace
 #endif // RATHENA_PACKET_OBSERVABILITY_TESTING
 
@@ -404,6 +426,7 @@ int main(){
 	test_runtime_capacity_overflow();
 	test_runtime_processing_and_render();
 	test_runtime_reset();
+	test_combined_render();
 #endif
 
 	if( g_failures != 0 ){
