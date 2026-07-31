@@ -468,7 +468,7 @@ static int32 clif_send_sub(block_list *bl, va_list ap)
 	memcpy(WFIFOP(fd,0), buf, len);
 	WFIFOSET(fd,len);
 
-	return 0;
+	return 1;
 }
 
 /*==========================================
@@ -489,30 +489,42 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 
 	sd = BL_CAST(BL_PC, bl);
 
+	size_t recipients = 0;
+	uint16_t packet_id = 0;
+	if( buf != nullptr && len >= 2 ){
+		const uint8_t* p = static_cast<const uint8_t*>(buf);
+		packet_id = static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+	}
+	packet_observability_record_send(packet_id, static_cast<size_t>(len));
+
 	switch(type) {
 
 	case ALL_CLIENT: //All player clients.
 		iter = mapit_getallusers();
 		while( ( tsd = static_cast<const map_session_data*>(mapit_next( iter )) ) != nullptr ){
 			if( session_isActive( fd = tsd->fd ) ){
+				recipients++;
 				WFIFOHEAD( fd, len );
 				memcpy( WFIFOP( fd, 0 ), buf, len );
 				WFIFOSET( fd, len );
 			}
 		}
 		mapit_free(iter);
+		packet_observability_record_broadcast(recipients);
 		break;
 
 	case ALL_SAMEMAP: //All players on the same map
 		iter = mapit_getallusers();
 		while( ( tsd = static_cast<const map_session_data*>(mapit_next( iter )) ) != nullptr ){
 			if( bl->m == tsd->m && session_isActive( fd = tsd->fd ) ){
+				recipients++;
 				WFIFOHEAD( fd, len );
 				memcpy( WFIFOP( fd, 0 ), buf, len );
 				WFIFOSET( fd, len );
 			}
 		}
 		mapit_free(iter);
+		packet_observability_record_broadcast(recipients);
 		break;
 
 	case AREA:
@@ -522,12 +534,14 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 		[[fallthrough]];
 	case AREA_WOC:
 	case AREA_WOS:
-		map_foreachinallarea(clif_send_sub, bl->m, bl->x-AREA_SIZE, bl->y-AREA_SIZE, bl->x+AREA_SIZE, bl->y+AREA_SIZE,
-			BL_PC, buf, len, bl, type);
+		recipients = static_cast<size_t>(map_foreachinallarea(clif_send_sub, bl->m, bl->x-AREA_SIZE, bl->y-AREA_SIZE, bl->x+AREA_SIZE, bl->y+AREA_SIZE,
+			BL_PC, const_cast<unsigned char*>(static_cast<const unsigned char*>(buf)), len, bl, type));
+		packet_observability_record_broadcast(recipients);
 		break;
 	case AREA_CHAT_WOC:
-		map_foreachinallarea(clif_send_sub, bl->m, bl->x-(AREA_SIZE-5), bl->y-(AREA_SIZE-5),
-			bl->x+(AREA_SIZE-5), bl->y+(AREA_SIZE-5), BL_PC, buf, len, bl, AREA_WOC);
+		recipients = static_cast<size_t>(map_foreachinallarea(clif_send_sub, bl->m, bl->x-(AREA_SIZE-5), bl->y-(AREA_SIZE-5),
+			bl->x+(AREA_SIZE-5), bl->y+(AREA_SIZE-5), BL_PC, const_cast<unsigned char*>(static_cast<const unsigned char*>(buf)), len, bl, AREA_WOC));
+		packet_observability_record_broadcast(recipients);
 		break;
 
 	case CHAT:
@@ -545,12 +559,14 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 				if (type == CHAT_WOS && cd->usersd[i] == sd)
 					continue;
 				if( session_isActive( fd = cd->usersd[i]->fd ) ){
+					recipients++;
 					WFIFOHEAD(fd,len);
 					memcpy(WFIFOP(fd,0), buf, len);
 					WFIFOSET(fd,len);
 				}
 			}
 		}
+		packet_observability_record_broadcast(recipients);
 		break;
 
 	case PARTY_AREA:
@@ -584,6 +600,7 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 				if( (type == PARTY_AREA || type == PARTY_AREA_WOS) && (sd->x < x0 || sd->y < y0 || sd->x > x1 || sd->y > y1) )
 					continue;
 
+				recipients++;
 				WFIFOHEAD(fd, len);
 				memcpy(WFIFOP(fd, 0), buf, len);
 				WFIFOSET(fd, len);
@@ -594,6 +611,7 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 			iter = mapit_getallusers();
 			while( ( tsd = static_cast<const map_session_data*>(mapit_next( iter )) ) != nullptr ){
 				if( tsd->partyspy == p->party.party_id && session_isActive( fd = tsd->fd ) ){
+					recipients++;
 					WFIFOHEAD( fd, len );
 					memcpy( WFIFOP( fd, 0 ), buf, len );
 					WFIFOSET( tsd->fd, len );
@@ -601,6 +619,7 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 			}
 			mapit_free(iter);
 		}
+		packet_observability_record_broadcast(recipients);
 		break;
 
 	case DUEL:
@@ -612,12 +631,14 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 			if( type == DUEL_WOS && bl->id == tsd->id )
 				continue;
 			if( sd->duel_group == tsd->duel_group && session_isActive( fd = tsd->fd ) ){
+				recipients++;
 				WFIFOHEAD( fd, len );
 				memcpy( WFIFOP( fd, 0 ), buf, len );
 				WFIFOSET( fd, len );
 			}
 		}
 		mapit_free(iter);
+		packet_observability_record_broadcast(recipients);
 		break;
 
 	case SELF:
@@ -663,6 +684,7 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 				if( (type == GUILD_AREA || type == GUILD_AREA_WOS) && (sd->x < x0 || sd->y < y0 || sd->x > x1 || sd->y > y1) )
 					continue;
 
+				recipients++;
 				WFIFOHEAD(fd,len);
 				memcpy(WFIFOP(fd,0), buf, len);
 				WFIFOSET(fd,len);
@@ -674,12 +696,14 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 		iter = mapit_getallusers();
 		while( ( tsd = static_cast<const map_session_data*>(mapit_next( iter )) ) != nullptr ){
 			if( tsd->guildspy == g.guild_id && session_isActive( fd = tsd->fd ) ){
+				recipients++;
 				WFIFOHEAD( fd, len );
 				memcpy( WFIFOP( fd, 0 ), buf, len );
 				WFIFOSET( fd, len );
 			}
 		}
 		mapit_free(iter);
+		packet_observability_record_broadcast(recipients);
 		break;
 	}
 	case BG_AREA:
@@ -704,11 +728,13 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 					continue;
 				if( (type == BG_AREA || type == BG_AREA_WOS) && (sd->x < x0 || sd->y < y0 || sd->x > x1 || sd->y > y1) )
 					continue;
+				recipients++;
 				WFIFOHEAD(fd,len);
 				memcpy(WFIFOP(fd,0), buf, len);
 				WFIFOSET(fd,len);
 			}
 		}
+		packet_observability_record_broadcast(recipients);
 		break;
 	case CLAN:
 		if( sd && sd->clan ){
@@ -719,6 +745,7 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 					continue;
 				}
 
+				recipients++;
 				WFIFOHEAD(fd,len);
 				memcpy(WFIFOP(fd,0), buf, len);
 				WFIFOSET(fd,len);
@@ -730,6 +757,7 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 			iter = mapit_getallusers();
 			while( ( tsd = static_cast<const map_session_data*>(mapit_next( iter )) ) != nullptr ){
 				if( tsd->clanspy == clan->id && session_isActive( fd = tsd->fd ) ){
+					recipients++;
 					WFIFOHEAD(fd, len);
 					memcpy(WFIFOP(fd, 0), buf, len);
 					WFIFOSET(fd, len);
@@ -737,6 +765,7 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 			}
 			mapit_free(iter);
 		}
+		packet_observability_record_broadcast(recipients);
 		break;
 
 	default:
