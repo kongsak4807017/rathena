@@ -492,8 +492,8 @@ int32 clif_send(const void* buf, int32 len, const block_list* bl, enum send_targ
 	size_t recipients = 0;
 	uint16_t packet_id = 0;
 	if( buf != nullptr && len >= 2 ){
-		const uint8_t* p = static_cast<const uint8_t*>(buf);
-		packet_id = static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+		const uint8_t* packet_bytes = static_cast<const uint8_t*>(buf);
+		packet_id = static_cast<uint16_t>(packet_bytes[0]) | (static_cast<uint16_t>(packet_bytes[1]) << 8);
 	}
 	packet_observability_record_send(packet_id, static_cast<size_t>(len));
 
