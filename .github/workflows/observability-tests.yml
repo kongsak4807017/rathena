@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "tools/observability/**"
+      - "src/map/core_observability*"
       - ".github/workflows/observability-tests.yml"
   push:
     branches:
       - master
     paths:
       - "tools/observability/**"
+      - "src/map/core_observability*"
       - ".github/workflows/observability-tests.yml"
 
 permissions:
@@ -30,3 +32,26 @@ jobs:
         run: python -m unittest discover -s tools/observability/tests -v
       - name: Validate example configuration
         run: python tools/observability/rathena_observer.py --config tools/observability/observer.example.json --check >/tmp/rathena-metrics.txt
+
+  cpp-unittest:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cxx: g++
+          - os: ubuntu-latest
+            cxx: clang++
+          - os: windows-latest
+            cxx: cl
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run core observability C++ tests
+        if: runner.os != 'Windows'
+        run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -Isrc/map tools/observability/tests/core_observability_test.cpp -o core_observability_test && ./core_observability_test
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Build and run core observability C++ tests (MSVC)
+        if: runner.os == 'Windows'
+        run: cl /std:c++17 /EHsc /W4 /WX /Isrc\map tools\observability\tests\core_observability_test.cpp /Fe:core_observability_test.exe && .\core_observability_test.exe
