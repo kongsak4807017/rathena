@@ -54,4 +54,4 @@ jobs:
         if: runner.os == 'Windows'
       - name: Build and run core observability C++ tests (MSVC)
         if: runner.os == 'Windows'
-        run: cl /std:c++17 /EHsc /W4 /WX /Isrc\map tools\observability\tests\core_observability_test.cpp /Fe:core_observability_test.exe && core_observability_test.exe
+        run: cl /std:c++17 /EHsc /W4 /WX /Isrc\map tools\observability\tests\core_observability_test.cpp /Fe:core_observability_test.exe && .\core_observability_test.exe
