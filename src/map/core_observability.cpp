@@ -222,6 +222,12 @@ void core_observability_init(){
 void core_observability_final(){
 	using namespace core_observability_internal;
 
+	// Write a final snapshot on graceful shutdown so short-lived or
+	// --run-once invocations still export accumulated packet metrics.
+	if( state.enabled ){
+		write_snapshot( gettick_nocache() );
+	}
+
 	if( state.timer_id != INVALID_TIMER ){
 		delete_timer( state.timer_id, core_observability_timer );
 		state.timer_id = INVALID_TIMER;
