@@ -5,6 +5,9 @@ on:
     paths:
       - "tools/observability/**"
       - "src/map/core_observability*"
+      - "src/map/packet_observability*"
+      - "src/common/socket.cpp"
+      - "src/map/clif.cpp"
       - ".github/workflows/observability-tests.yml"
   push:
     branches:
@@ -12,6 +15,9 @@ on:
     paths:
       - "tools/observability/**"
       - "src/map/core_observability*"
+      - "src/map/packet_observability*"
+      - "src/common/socket.cpp"
+      - "src/map/clif.cpp"
       - ".github/workflows/observability-tests.yml"
 
 permissions:
@@ -50,8 +56,14 @@ jobs:
       - name: Build and run core observability C++ tests
         if: runner.os != 'Windows'
         run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -Isrc/map tools/observability/tests/core_observability_test.cpp -o core_observability_test && ./core_observability_test
+      - name: Build and run packet observability C++ tests
+        if: runner.os != 'Windows'
+        run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -Isrc/map tools/observability/tests/packet_observability_test.cpp -o packet_observability_test && ./packet_observability_test
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
       - name: Build and run core observability C++ tests (MSVC)
         if: runner.os == 'Windows'
         run: cl /std:c++17 /EHsc /W4 /WX /Isrc\map tools\observability\tests\core_observability_test.cpp /Fe:core_observability_test.exe && .\core_observability_test.exe
+      - name: Build and run packet observability C++ tests (MSVC)
+        if: runner.os == 'Windows'
+        run: cl /std:c++17 /EHsc /W4 /WX /Isrc\map tools\observability\tests\packet_observability_test.cpp /Fe:packet_observability_test.exe && .\packet_observability_test.exe
