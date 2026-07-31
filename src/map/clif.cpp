@@ -47,6 +47,7 @@
 #include "mercenary.hpp"
 #include "mob.hpp"
 #include "npc.hpp"
+#include "packet_observability.hpp"
 #include "party.hpp"
 #include "pc.hpp"
 #include "pc_groups.hpp"
@@ -25740,6 +25741,7 @@ static int32 clif_parse(int32 fd)
 		}
 #endif
 
+		packet_observability_record_invalid();
 		set_eof(fd);
 		return 0;
 	}
@@ -25756,6 +25758,7 @@ static int32 clif_parse(int32 fd)
 #ifdef DUMP_INVALID_PACKET
 			ShowDump(RFIFOP(fd,0), RFIFOREST(fd));
 #endif
+			packet_observability_record_invalid();
 			set_eof(fd);
 			return 0;
 		}
@@ -25765,9 +25768,12 @@ static int32 clif_parse(int32 fd)
 #ifdef DUMP_INVALID_PACKET
 		ShowDump( RFIFOP( fd, 0 ), RFIFOREST( fd ) );
 #endif
+		packet_observability_record_invalid();
 		set_eof( fd );
 		return 0; // not enough data received to form the packet
 	}
+
+	packet_observability_record_receive(static_cast<uint16_t>(cmd), static_cast<size_t>(packet_len));
 
 #ifdef PACKET_OBFUSCATION
 	RFIFOW(fd, 0) = cmd;
@@ -25775,20 +25781,29 @@ static int32 clif_parse(int32 fd)
 		sd->cryptKey = ((sd->cryptKey * clif_cryptKey[1]) + clif_cryptKey[2]) & 0xFFFFFFFF; // Update key for the next packet
 #endif
 
+	auto run_parser = [&](void (*func)(int32, map_session_data*)){
+		t_tick start = gettick_nocache();
+		func(fd, sd);
+		t_tick end = gettick_nocache();
+		uint64_t duration_ms = (end >= start) ? static_cast<uint64_t>(end - start) : 0;
+		packet_observability_record_processing(static_cast<uint16_t>(cmd), duration_ms);
+	};
+
 	if( packet_db[cmd].func == clif_parse_debug )
-		packet_db[cmd].func(fd, sd);
+		run_parser(packet_db[cmd].func);
 	else if( packet_db[cmd].func != nullptr ) {
 		if( !sd && packet_db[cmd].func != clif_parse_WantToConnection )
 			; //Only valid packet when there is no session
-		else
-		if( sd && sd->prev == nullptr && packet_db[cmd].func != clif_parse_LoadEndAck )
+		else if( sd && sd->prev == nullptr && packet_db[cmd].func != clif_parse_LoadEndAck )
 			; //Only valid packet when player is not on a map
 		else
-			packet_db[cmd].func(fd, sd);
-	}
+			run_parser(packet_db[cmd].func);
+	} else {
+		packet_observability_record_unknown();
 #ifdef DUMP_UNKNOWN_PACKET
-	else DumpUnknown(fd,sd,cmd,packet_len);
+		DumpUnknown(fd,sd,cmd,packet_len);
 #endif
+	}
 	RFIFOSKIP(fd, packet_len);
 	}; // main loop end
 
