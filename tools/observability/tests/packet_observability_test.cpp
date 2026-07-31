@@ -258,6 +258,134 @@ void test_counter_saturation(){
 
 } // namespace
 
+#ifdef RATHENA_PACKET_OBSERVABILITY_TESTING
+#include "packet_observability.cpp"
+
+int32 stdout_with_ansisequence = 0;
+int32 msg_silent = 0;
+int32 console_msg_log = 0;
+char console_log_filepath[32] = {};
+char timestamp_format[20] = {};
+
+void ShowWarning( const char* fmt, ... ){
+	( void )fmt;
+}
+
+void ShowInfo( const char* fmt, ... ){
+	( void )fmt;
+}
+
+namespace {
+
+void test_runtime_disabled_hooks(){
+	packet_observability_test_reset( false, 25, 16 );
+
+	packet_observability_record_receive( 0x0064, 100 );
+	packet_observability_record_send( 0x0064, 200 );
+	packet_observability_record_invalid();
+	packet_observability_record_unknown();
+	packet_observability_record_processing( 0x0064, 50 );
+	packet_observability_record_broadcast( 10 );
+	packet_observability_record_transport_receive( 1000 );
+	packet_observability_record_transport_send( 2000 );
+
+	const packet_observability_snapshot snapshot = packet_observability_test_snapshot();
+
+	CHECK( snapshot.received_packets_total == 0 );
+	CHECK( snapshot.received_bytes_total == 0 );
+	CHECK( snapshot.sent_packets_total == 0 );
+	CHECK( snapshot.sent_bytes_total == 0 );
+	CHECK( snapshot.invalid_packets_total == 0 );
+	CHECK( snapshot.unknown_packets_total == 0 );
+	CHECK( snapshot.broadcast_calls_total == 0 );
+	CHECK( snapshot.broadcast_recipients_total == 0 );
+	CHECK( snapshot.transport_received_bytes_total == 0 );
+	CHECK( snapshot.transport_sent_bytes_total == 0 );
+	CHECK( snapshot.packet_id_overflow_total == 0 );
+	CHECK( snapshot.packets.empty() );
+}
+
+void test_runtime_enabled_hooks(){
+	packet_observability_test_reset( true, 25, 16 );
+
+	packet_observability_record_receive( 0x0064, 100 );
+	packet_observability_record_receive( 0x0085, 50 );
+	packet_observability_record_send( 0x0064, 200 );
+	packet_observability_record_invalid();
+	packet_observability_record_unknown();
+	packet_observability_record_unknown();
+	packet_observability_record_broadcast( 10 );
+	packet_observability_record_broadcast( 20 );
+	packet_observability_record_transport_receive( 1000 );
+	packet_observability_record_transport_send( 2000 );
+
+	const packet_observability_snapshot snapshot = packet_observability_test_snapshot();
+
+	CHECK( snapshot.received_packets_total == 2 );
+	CHECK( snapshot.received_bytes_total == 150 );
+	CHECK( snapshot.sent_packets_total == 1 );
+	CHECK( snapshot.sent_bytes_total == 200 );
+	CHECK( snapshot.invalid_packets_total == 1 );
+	CHECK( snapshot.unknown_packets_total == 2 );
+	CHECK( snapshot.broadcast_calls_total == 2 );
+	CHECK( snapshot.broadcast_recipients_total == 30 );
+	CHECK( snapshot.broadcast_recipients_last == 20 );
+	CHECK( snapshot.broadcast_recipients_max == 20 );
+	CHECK( snapshot.transport_received_bytes_total == 1000 );
+	CHECK( snapshot.transport_sent_bytes_total == 2000 );
+	CHECK( snapshot.packets.size() == 2 );
+}
+
+void test_runtime_capacity_overflow(){
+	packet_observability_test_reset( true, 25, 2 );
+
+	packet_observability_record_receive( 0x0001, 1 );
+	packet_observability_record_receive( 0x0002, 1 );
+	// Third distinct packet ID exceeds capacity.
+	packet_observability_record_receive( 0x0003, 1 );
+	// Repeated overflow for the same rejected ID must still count.
+	packet_observability_record_receive( 0x0003, 1 );
+
+	const packet_observability_snapshot snapshot = packet_observability_test_snapshot();
+
+	CHECK( snapshot.packet_id_overflow_total == 2 );
+	CHECK( snapshot.packets.size() == 2 );
+}
+
+void test_runtime_processing_and_render(){
+	packet_observability_test_reset( true, 10, 4 );
+
+	packet_observability_record_processing( 0x0064, 5 );
+	packet_observability_record_processing( 0x0064, 15 );
+
+	const packet_observability_snapshot snapshot = packet_observability_test_snapshot();
+
+	CHECK( snapshot.packets.size() == 1 );
+	const packet_observability_packet_metrics& metrics = snapshot.packets[0].second;
+	CHECK( metrics.processing_duration_last_ms == 15 );
+	CHECK( metrics.processing_duration_max_ms == 15 );
+	CHECK( metrics.processing_slow_total == 1 );
+
+	const std::string rendered = packet_observability_render_snapshot();
+	CHECK( !rendered.empty() );
+	CHECK( rendered.find( "rathena_packet_processing_slow_total{packet=\"0x0064\"} 1\n" ) != std::string::npos );
+}
+
+void test_runtime_reset(){
+	packet_observability_test_reset( true, 25, 16 );
+	packet_observability_record_receive( 0x0064, 100 );
+
+	packet_observability_test_reset( false, 25, 16 );
+
+	const packet_observability_snapshot snapshot = packet_observability_test_snapshot();
+	CHECK( !packet_observability_enabled() );
+	CHECK( snapshot.received_packets_total == 0 );
+	CHECK( snapshot.packets.empty() );
+}
+
+} // namespace
+#endif // RATHENA_PACKET_OBSERVABILITY_TESTING
+
 int main(){
 	test_parse_enabled();
 	test_parse_slow_ms();
@@ -269,6 +397,14 @@ int main(){
 	test_render_prometheus();
 	test_render_prometheus_privacy();
 	test_counter_saturation();
+
+#ifdef RATHENA_PACKET_OBSERVABILITY_TESTING
+	test_runtime_disabled_hooks();
+	test_runtime_enabled_hooks();
+	test_runtime_capacity_overflow();
+	test_runtime_processing_and_render();
+	test_runtime_reset();
+#endif
 
 	if( g_failures != 0 ){
 		std::fprintf( stderr, "%d check(s) failed\n", g_failures );
