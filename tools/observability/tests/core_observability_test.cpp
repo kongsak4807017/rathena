@@ -227,6 +227,77 @@ void test_empty_map_snapshot(){
 	CHECK( out.find( "rathena_core_entities_total{type=\"skill\"} 0\n" ) != std::string::npos );
 }
 
+void test_output_path_sanitization(){
+	using core_observability::default_output_path;
+	using core_observability::metrics_root_directory;
+	using core_observability::resolve_output_path;
+
+	// unset / empty falls back to the default without being a user error
+	core_observability::output_path_result r = resolve_output_path( nullptr );
+	CHECK( r.valid == true );
+	CHECK( r.path == default_output_path );
+
+	r = resolve_output_path( "" );
+	CHECK( r.valid == true );
+	CHECK( r.path == default_output_path );
+
+	// plain relative filename is placed below the metrics root
+	r = resolve_output_path( "rathena_map.prom" );
+	CHECK( r.valid == true );
+	CHECK( r.path == "log/metrics/rathena_map.prom" );
+
+	// relative subdirectory is allowed
+	r = resolve_output_path( "shard/map.prom" );
+	CHECK( r.valid == true );
+	CHECK( r.path == "log/metrics/shard/map.prom" );
+
+	// backslashes are normalized to forward slashes
+	r = resolve_output_path( "shard\\map.prom" );
+	CHECK( r.valid == true );
+	CHECK( r.path == "log/metrics/shard/map.prom" );
+
+	// every accepted path must stay below the metrics root
+	const std::string root_prefix = std::string( metrics_root_directory ) + "/";
+	CHECK( r.path.compare( 0, root_prefix.size(), root_prefix ) == 0 );
+
+	// parent directory traversal is rejected
+	r = resolve_output_path( "../secret.txt" );
+	CHECK( r.valid == false );
+	CHECK( r.path == default_output_path );
+
+	r = resolve_output_path( "foo/../../secret.txt" );
+	CHECK( r.valid == false );
+	CHECK( r.path == default_output_path );
+
+	// POSIX absolute paths are rejected
+	r = resolve_output_path( "/absolute/path.prom" );
+	CHECK( r.valid == false );
+	CHECK( r.path == default_output_path );
+
+	// Windows drive paths are rejected (both separator styles)
+	r = resolve_output_path( "C:\\absolute\\path.prom" );
+	CHECK( r.valid == false );
+	CHECK( r.path == default_output_path );
+
+	r = resolve_output_path( "C:/absolute/path.prom" );
+	CHECK( r.valid == false );
+	CHECK( r.path == default_output_path );
+
+	// UNC paths are rejected
+	r = resolve_output_path( "\\\\server\\share\\file.prom" );
+	CHECK( r.valid == false );
+	CHECK( r.path == default_output_path );
+
+	// control characters are rejected
+	r = resolve_output_path( std::string( "shard\x01map.prom" ).c_str() );
+	CHECK( r.valid == false );
+	CHECK( r.path == default_output_path );
+
+	r = resolve_output_path( std::string( "shard\tmap.prom" ).c_str() );
+	CHECK( r.valid == false );
+	CHECK( r.path == default_output_path );
+}
+
 void test_atomic_output(){
 	using core_observability::atomic_write_text_file;
 	using core_observability::ensure_parent_directory;
@@ -275,6 +346,7 @@ int main(){
 	test_drift_negative_clamp();
 	test_metrics_rendering();
 	test_empty_map_snapshot();
+	test_output_path_sanitization();
 	test_atomic_output();
 
 	if( g_failures != 0 ){

@@ -19,14 +19,23 @@ Configuration is via environment variables only:
 | --- | --- | --- |
 | `RATHENA_CORE_OBSERVABILITY` | `0` (off) | `1`, `true`, `on`, `yes` enable; everything else keeps it off |
 | `RATHENA_CORE_OBSERVABILITY_INTERVAL_MS` | `10000` | Snapshot interval in ms. Clamped to [1000, 3600000]. Malformed values fall back to the default with a single startup warning |
-| `RATHENA_CORE_OBSERVABILITY_OUTPUT` | `log/metrics/rathena_map.prom` | Destination of the Prometheus textfile |
+| `RATHENA_CORE_OBSERVABILITY_OUTPUT` | `rathena_map.prom` | Relative file name (or relative subdirectory path) of the Prometheus textfile. The output is always placed below the fixed root `log/metrics`; absolute paths, drive/UNC paths, `..` components and control characters are rejected and fall back to the default with a single startup warning |
+
+The metrics root directory `log/metrics` cannot be overridden, so the
+environment variable can never write outside of it:
+
+```text
+RATHENA_CORE_OBSERVABILITY_OUTPUT=rathena_map.prom       -> log/metrics/rathena_map.prom
+RATHENA_CORE_OBSERVABILITY_OUTPUT=shard/map-server-1.prom -> log/metrics/shard/map-server-1.prom
+RATHENA_CORE_OBSERVABILITY_OUTPUT=../somewhere.prom       -> rejected, uses the default
+```
 
 Example (enabled, one snapshot per second):
 
 ```powershell
 $env:RATHENA_CORE_OBSERVABILITY = "1"
 $env:RATHENA_CORE_OBSERVABILITY_INTERVAL_MS = "1000"
-$env:RATHENA_CORE_OBSERVABILITY_OUTPUT = "log/metrics/rathena_map.prom"
+$env:RATHENA_CORE_OBSERVABILITY_OUTPUT = "rathena_map.prom"
 .\map-server.exe
 ```
 

@@ -26,7 +26,6 @@ namespace {
 constexpr const char* ENV_ENABLE = "RATHENA_CORE_OBSERVABILITY";
 constexpr const char* ENV_INTERVAL_MS = "RATHENA_CORE_OBSERVABILITY_INTERVAL_MS";
 constexpr const char* ENV_OUTPUT = "RATHENA_CORE_OBSERVABILITY_OUTPUT";
-constexpr const char* DEFAULT_OUTPUT_PATH = "log/metrics/rathena_map.prom";
 
 // Mirrors the interval timer rescheduling of do_timer(): the schedule is
 // advanced by the interval, unless the timer lagged more than one second,
@@ -184,8 +183,15 @@ void core_observability_init(){
 
 	state.interval_ms = read_interval_ms();
 
-	const char* output = std::getenv( ENV_OUTPUT );
-	state.output_path = ( output != nullptr && *output != '\0' ) ? output : DEFAULT_OUTPUT_PATH;
+	// The metrics root directory (log/metrics) cannot be overridden; unsafe
+	// values fall back to the default with a single warning.
+	const core_observability::output_path_result output = core_observability::resolve_output_path( std::getenv( ENV_OUTPUT ) );
+
+	if( !output.valid ){
+		ShowWarning( "core_observability: unsafe %s value '%s', falling back to the default '%s'.\n", ENV_OUTPUT, std::getenv( ENV_OUTPUT ), core_observability::default_output_path );
+	}
+
+	state.output_path = output.path;
 
 	state.enabled = true;
 

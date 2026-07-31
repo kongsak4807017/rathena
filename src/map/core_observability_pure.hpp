@@ -125,6 +125,97 @@ inline int64_t compute_timer_drift_ms( int64_t scheduled_tick, int64_t actual_ti
 	return drift > 0 ? drift : 0;
 }
 
+/// Root directory for all observability metrics output.
+inline constexpr const char* metrics_root_directory = "log/metrics";
+/// Default metrics file below the metrics root.
+inline constexpr const char* default_output_path = "log/metrics/rathena_map.prom";
+
+struct output_path_result {
+	std::string path;
+	/// false when the user supplied an unsafe value (caller should warn once)
+	bool valid;
+};
+
+/**
+ * Resolve RATHENA_CORE_OBSERVABILITY_OUTPUT to a safe path.
+ *
+ * The environment variable may only name a relative file or directory path
+ * below the metrics root; the root itself can never be overridden. POSIX
+ * absolute paths, Windows drive paths, UNC paths, ".." components and
+ * control characters are rejected. Backslashes are normalized to forward
+ * slashes. Unsafe input falls back to the default output path with
+ * valid=false so the caller can warn once.
+ */
+inline output_path_result resolve_output_path( const char* raw ){
+	if( raw == nullptr ){
+		return { default_output_path, true };
+	}
+
+	std::string value( raw );
+
+	// trim surrounding whitespace
+	const size_t first = value.find_first_not_of( " \t\r\n" );
+	if( first == std::string::npos ){
+		return { default_output_path, true };
+	}
+	const size_t last = value.find_last_not_of( " \t\r\n" );
+	value = value.substr( first, last - first + 1 );
+
+	// control characters are never valid in a path
+	for( const unsigned char c : value ){
+		if( c < 0x20 || c == 0x7f ){
+			return { default_output_path, false };
+		}
+	}
+
+	// normalize separators
+	std::replace( value.begin(), value.end(), '\\', '/' );
+
+	// POSIX absolute path and (after normalization) UNC path
+	if( value[0] == '/' ){
+		return { default_output_path, false };
+	}
+
+	// Windows drive path ("C:", "C:/" or drive-relative "C:file")
+	if( value.find( ':' ) != std::string::npos ){
+		return { default_output_path, false };
+	}
+
+	// split into components and reject traversal
+	std::vector<std::string> components;
+	size_t pos = 0;
+
+	while( pos <= value.size() ){
+		const size_t next = value.find( '/', pos );
+		const std::string component = value.substr( pos, next == std::string::npos ? std::string::npos : next - pos );
+
+		if( component == ".." ){
+			return { default_output_path, false };
+		}
+
+		if( !component.empty() && component != "." ){
+			components.push_back( component );
+		}
+
+		if( next == std::string::npos ){
+			break;
+		}
+		pos = next + 1;
+	}
+
+	if( components.empty() ){
+		return { default_output_path, false };
+	}
+
+	std::string resolved( metrics_root_directory );
+	for( const std::string& component : components ){
+		resolved += '/';
+		resolved += component;
+	}
+
+	return { resolved, true };
+}
+
 /// Escape a Prometheus label value (backslash, double quote, newline).
 inline std::string escape_label_value( const std::string& value ){
 	std::string out;
