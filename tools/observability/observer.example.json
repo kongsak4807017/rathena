@@ -1,0 +1,16 @@
+{
+  "listen_host": "127.0.0.1",
+  "listen_port": 9468,
+  "scrape_interval_seconds": 5,
+  "process_targets": [
+    {"name": "login-server", "command_contains": "login-server"},
+    {"name": "char-server", "command_contains": "char-server"},
+    {"name": "map-server", "command_contains": "map-server"}
+  ],
+  "tcp_ports": [6900, 6121, 5121],
+  "mysql_probe": {
+    "enabled": false,
+    "command": ["mysql", "--batch", "--skip-column-names", "-e", "SELECT 1"],
+    "timeout_seconds": 2
+  }
+}
