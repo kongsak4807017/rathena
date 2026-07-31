@@ -150,10 +150,12 @@ def resolve_pid(proc_root: pathlib.Path, target: ProcessTarget) -> int | None:
         if not entry.name.isdigit():
             continue
         try:
-            cmdline = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+            raw_tokens = [token for token in (entry / "cmdline").read_bytes().split(b"\x00") if token]
+            tokens = [token.decode("utf-8", "replace") for token in raw_tokens]
         except (FileNotFoundError, PermissionError, ProcessLookupError):
             continue
-        if target.command_contains in cmdline:
+        command_name = target.command_contains
+        if any(pathlib.Path(token).name == command_name for token in tokens):
             return int(entry.name)
     return None
 
