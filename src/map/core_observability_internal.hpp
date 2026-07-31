@@ -31,6 +31,7 @@ struct observability_state {
 	bool enabled = false;
 	int32 timer_id = INVALID_TIMER;
 	int32 interval_ms = 10000;
+	t_tick next_tick = 0;
 	std::string output_path;
 	t_tick last_drift_ms = 0;
 	t_tick max_drift_ms = 0;
@@ -43,7 +44,7 @@ struct observability_state {
 extern observability_state state;
 
 std::vector<map_snapshot> collect_map_snapshots(std::array<uint64, ENTITY_COUNT>& totals);
-bool write_snapshot(t_tick scheduled_tick);
+bool write_snapshot(t_tick tick);
 int32 read_interval_ms();
 
 } // namespace core_observability_internal
