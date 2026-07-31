@@ -7,10 +7,12 @@ import unittest
 
 from tools.observability.rathena_observer import (
     ProcessSample,
+    ProcessTarget,
     Snapshot,
     count_established_tcp,
     load_config,
     render_prometheus,
+    resolve_pid,
 )
 
 
@@ -46,6 +48,16 @@ class ObserverTests(unittest.TestCase):
             tcp.write_text(content, encoding="utf-8")
             counts = count_established_tcp([tcp], [5121, 6900])
         self.assertEqual(counts, {5121: 1, 6900: 1})
+
+    def test_resolve_pid_matches_executable_token_not_arbitrary_substring(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            proc_root = pathlib.Path(directory)
+            (proc_root / "100").mkdir()
+            (proc_root / "100" / "cmdline").write_bytes(b"/bin/bash\x00echo map-server\x00")
+            (proc_root / "200").mkdir()
+            (proc_root / "200" / "cmdline").write_bytes(b"/opt/rathena/map-server\x00--run-once\x00")
+            pid = resolve_pid(proc_root, ProcessTarget(name="map-server", command_contains="map-server"))
+        self.assertEqual(pid, 200)
 
     def test_render_prometheus_includes_process_tcp_mysql_and_errors(self) -> None:
         snapshot = Snapshot(
