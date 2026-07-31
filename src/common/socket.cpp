@@ -47,6 +47,8 @@
 #include "strlib.hpp"
 #include "timer.hpp"
 
+#include "../map/packet_observability.hpp"
+
 // Reuseable global packet buffer to prevent too many allocations
 // Take socket.cpp::socket_max_client_packet into consideration
 int8 packet_buffer[UINT16_MAX];
@@ -402,6 +404,9 @@ int32 recv_to_fifo(int32 fd)
 		socket_data_ci += len;
 	}
 #endif
+
+	packet_observability_record_transport_receive( static_cast<size_t>( len ) );
+
 	return 0;
 }
 
@@ -433,6 +438,7 @@ int32 send_from_fifo(int32 fd)
 	if( len > 0 )
 	{
 		session[fd]->wdata_tick = last_tick;
+		packet_observability_record_transport_send( static_cast<size_t>( len ) );
 
 		// some data could not be transferred?
 		// shift unsent data to the beginning of the queue
