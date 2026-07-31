@@ -33,6 +33,7 @@
 #include "chrif.hpp"
 #include "clan.hpp"
 #include "clif.hpp"
+#include "core_observability.hpp"
 #include "duel.hpp"
 #include "elemental.hpp"
 #include "guild.hpp"
@@ -5010,6 +5011,9 @@ void MapServer::finalize(){
 	ShowStatus("Terminating...\n");
 	channel_config.closing = true;
 
+	// Stop core observability before any structure it measures is destroyed.
+	core_observability_final();
+
 	//Ladies and babies first.
 	struct s_mapiterator* iter = mapit_getallusers();
 	for( map_session_data* sd = (TBL_PC*)mapit_first(iter); mapit_exists(iter); sd = (TBL_PC*)mapit_next(iter) )
@@ -5469,6 +5473,9 @@ bool MapServer::initialize( int32 argc, char *argv[] ){
 		add_timer_func_list(parse_console_timer, "parse_console_timer");
 		add_timer_interval(gettick()+1000, parse_console_timer, 0, 0, 1000); //start in 1s each 1sec
 	}
+
+	// Maps and core systems are ready: start optional core instrumentation.
+	core_observability_init();
 
 	return true;
 }
