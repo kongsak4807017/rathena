@@ -6,8 +6,8 @@ on:
       - "tools/observability/**"
       - "src/map/core_observability*"
       - "src/map/packet_observability*"
-      - "src/common/socket.cpp"
-      - "src/map/clif.cpp"
+      - "src/common/sql_observability*"
+      - "src/common/sql.cpp"
       - ".github/workflows/observability-tests.yml"
   push:
     branches:
@@ -16,8 +16,8 @@ on:
       - "tools/observability/**"
       - "src/map/core_observability*"
       - "src/map/packet_observability*"
-      - "src/common/socket.cpp"
-      - "src/map/clif.cpp"
+      - "src/common/sql_observability*"
+      - "src/common/sql.cpp"
       - ".github/workflows/observability-tests.yml"
 
 permissions:
@@ -59,6 +59,9 @@ jobs:
       - name: Build and run packet observability C++ tests
         if: runner.os != 'Windows'
         run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -Isrc/map tools/observability/tests/packet_observability_test.cpp -o packet_observability_test && ./packet_observability_test
+      - name: Build and run SQL observability C++ tests
+        if: runner.os != 'Windows'
+        run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -Isrc/common tools/observability/tests/sql_observability_test.cpp -o sql_observability_test && ./sql_observability_test
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
       - name: Build and run core observability C++ tests (MSVC)
@@ -67,3 +70,6 @@ jobs:
       - name: Build and run packet observability C++ tests (MSVC)
         if: runner.os == 'Windows'
         run: cl /std:c++17 /EHsc /W4 /WX /Isrc\map tools\observability\tests\packet_observability_test.cpp /Fe:packet_observability_test.exe && .\packet_observability_test.exe
+      - name: Build and run SQL observability C++ tests (MSVC)
+        if: runner.os == 'Windows'
+        run: cl /std:c++17 /EHsc /W4 /WX /Isrc\common tools\observability\tests\sql_observability_test.cpp /Fe:sql_observability_test.exe && .\sql_observability_test.exe
