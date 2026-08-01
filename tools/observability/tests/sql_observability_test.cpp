@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <string>
 
 #include "sql_observability_pure.hpp"
 
@@ -98,6 +100,110 @@ void test_subsystem_labels(){
 	CHECK( std::strcmp( sql_observability_subsystem_label( static_cast<SqlObservabilitySubsystem>( 6 ) ), "unknown" ) == 0 );
 }
 
+void test_saturating_add(){
+	CHECK( sql_observability_saturating_add( 5, 7 ) == 12 );
+	CHECK( sql_observability_saturating_add( std::numeric_limits<uint64_t>::max() - 1, 5 ) == std::numeric_limits<uint64_t>::max() );
+	CHECK( sql_observability_saturating_add( std::numeric_limits<uint64_t>::max(), 0 ) == std::numeric_limits<uint64_t>::max() );
+	CHECK( sql_observability_saturating_add( 0, std::numeric_limits<uint64_t>::max() ) == std::numeric_limits<uint64_t>::max() );
+}
+
+void test_counter_saturation(){
+	SqlObservabilityCounters counters;
+
+	counters.attempts_total = std::numeric_limits<uint64_t>::max() - 2;
+	counters.record_attempt();
+	counters.record_attempt();
+	counters.record_attempt();
+	CHECK( counters.attempts_total == std::numeric_limits<uint64_t>::max() );
+
+	counters.failures_total = std::numeric_limits<uint64_t>::max() - 1;
+	counters.record_failure();
+	CHECK( counters.failures_total == std::numeric_limits<uint64_t>::max() );
+	// attempts_total was already saturated and stays saturated.
+	CHECK( counters.attempts_total == std::numeric_limits<uint64_t>::max() );
+}
+
+void test_subsystem_admission(){
+	SqlObservabilitySnapshot snapshot;
+
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Map, 30, true, 50 );
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Map, 70, false, 50 );
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Char, 20, true, 50 );
+
+	// Aggregate: 3 attempts, 1 failure, 1 slow (70 >= 50), max = 70, last = 20.
+	CHECK( snapshot.queries.aggregate.attempts_total == 3 );
+	CHECK( snapshot.queries.aggregate.failures_total == 1 );
+	CHECK( snapshot.queries.aggregate.slow_total == 1 );
+	CHECK( snapshot.queries.aggregate.duration_last_ms == 20 );
+	CHECK( snapshot.queries.aggregate.duration_max_ms == 70 );
+
+	const SqlObservabilityCounters& map = snapshot.queries.by_subsystem[static_cast<size_t>( SqlObservabilitySubsystem::Map )];
+	CHECK( map.attempts_total == 2 );
+	CHECK( map.failures_total == 1 );
+	CHECK( map.slow_total == 1 );
+	CHECK( map.duration_last_ms == 70 );
+	CHECK( map.duration_max_ms == 70 );
+
+	const SqlObservabilityCounters& chr = snapshot.queries.by_subsystem[static_cast<size_t>( SqlObservabilitySubsystem::Char )];
+	CHECK( chr.attempts_total == 1 );
+	CHECK( chr.failures_total == 0 );
+	CHECK( chr.slow_total == 0 );
+	CHECK( chr.duration_last_ms == 20 );
+	CHECK( chr.duration_max_ms == 20 );
+
+	// Invalid enum value maps to Unknown and increments overflow exactly once.
+	snapshot.queries.record_query( static_cast<SqlObservabilitySubsystem>( 255 ), 10, true, 50 );
+	const SqlObservabilityCounters& unknown = snapshot.queries.by_subsystem[static_cast<size_t>( SqlObservabilitySubsystem::Unknown )];
+	CHECK( unknown.attempts_total == 1 );
+	CHECK( snapshot.connections.subsystem_overflow_total == 1 );
+}
+
+void test_deterministic_ordering(){
+	SqlObservabilitySnapshot snapshot;
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Map, 1, true, 50 );
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Char, 1, true, 50 );
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Login, 1, true, 50 );
+
+	const std::string out = sql_observability_render_prometheus( snapshot );
+
+	// Per-subsystem labels appear in fixed enum order, not insertion order.
+	const size_t login_pos = out.find( "{subsystem=\"login\"}" );
+	const size_t char_pos = out.find( "{subsystem=\"char\"}" );
+	const size_t map_pos = out.find( "{subsystem=\"map\"}" );
+
+	CHECK( login_pos != std::string::npos );
+	CHECK( char_pos != std::string::npos );
+	CHECK( map_pos != std::string::npos );
+	CHECK( login_pos < char_pos );
+	CHECK( char_pos < map_pos );
+}
+
+void test_render_prometheus_privacy(){
+	// These sentinel strings must never appear in rendered output.
+	const std::string sentinel_query = "SELECT password FROM login";
+	const std::string sentinel_password = "secret-password";
+	const std::string sentinel_account = "account_id=123";
+	const std::string sentinel_error = "DB error private value";
+
+	SqlObservabilitySnapshot snapshot;
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Login, 10, false, 50 );
+
+	const std::string out = sql_observability_render_prometheus( snapshot );
+
+	CHECK( out.find( sentinel_query ) == std::string::npos );
+	CHECK( out.find( sentinel_password ) == std::string::npos );
+	CHECK( out.find( sentinel_account ) == std::string::npos );
+	CHECK( out.find( sentinel_error ) == std::string::npos );
+}
+
+void test_empty_snapshot_render(){
+	const std::string out = sql_observability_render_prometheus( SqlObservabilitySnapshot() );
+
+	CHECK( !out.empty() );
+	CHECK( out.back() == '\n' );
+	CHECK( out.find( "\n\n" ) == std::string::npos );
+}
+
 } // namespace
 
 int main(){
@@ -105,6 +211,12 @@ int main(){
 	test_parse_u32();
 	test_is_slow();
 	test_subsystem_labels();
+	test_saturating_add();
+	test_counter_saturation();
+	test_subsystem_admission();
+	test_deterministic_ordering();
+	test_render_prometheus_privacy();
+	test_empty_snapshot_render();
 
 	if( g_failures != 0 ){
 		std::fprintf( stderr, "%d check(s) failed\n", g_failures );
