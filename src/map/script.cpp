@@ -4185,7 +4185,7 @@ int32 run_func(struct script_state *st)
 /*==========================================
  * script execution
  *------------------------------------------*/
-void run_script(struct script_code *rootscript, int32 pos, int32 rid, int32 oid)
+void run_script(struct script_code *rootscript, int32 pos, int32 rid, int32 oid, ScriptObservabilityCategory category)
 {
 	struct script_state *st;
 
@@ -4196,6 +4196,7 @@ void run_script(struct script_code *rootscript, int32 pos, int32 rid, int32 oid)
 	//      It is unclear how that can be triggered, so it needs the be traced/checked in more detail.
 	// NOTE At the time of this change, this function wasn't capable of taking over the script state because st->scriptroot was never set.
 	st = script_alloc_state(rootscript, pos, rid, oid);
+	st->observability_category = category;
 	run_script_main(st);
 }
 
@@ -4225,6 +4226,7 @@ void script_stop_scriptinstances(struct script_code *code) {
  *------------------------------------------*/
 TIMER_FUNC(run_script_timer){
 	struct script_state *st = (struct script_state *)data;
+	st->observability_category = ScriptObservabilityCategory::Timer;
 	struct linkdb_node *node = (struct linkdb_node *)sleep_db;
 
 	// If it was a player before going to sleep and there is still a unit attached to the script
@@ -23405,7 +23407,7 @@ BUILDIN_FUNC(consumeitem)
 
 	// Set the item id to the item id of the script that will be executed (needed for announcement of group containers for example)
 	sd->itemid = item_data->nameid;
-	run_script( item_data->script, 0, sd->id, 0 );
+	run_script( item_data->script, 0, sd->id, 0, ScriptObservabilityCategory::Item );
 
 	if( sd->st != nullptr ){
 		script_free_state( sd->st );

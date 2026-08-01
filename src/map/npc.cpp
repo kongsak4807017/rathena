@@ -1271,7 +1271,7 @@ int32 npc_event_doall_sub(DBKey key, DBData *data, va_list ap)
 		if(rid) // a player may only have 1 script running at the same time
 			npc_event_sub(map_id2sd(rid),ev,key.str);
 		else
-			run_script(ev->nd->u.scr.script,ev->pos,rid,ev->nd->id);
+			run_script(ev->nd->u.scr.script,ev->pos,rid,ev->nd->id,ScriptObservabilityCategory::Event);
 		(*c)++;
 	}
 
@@ -1525,7 +1525,7 @@ TIMER_FUNC(npc_timerevent){
 	}
 
 	// Run the script
-	run_script(nd->u.scr.script,te->pos,nd->u.scr.rid,nd->id);
+	run_script(nd->u.scr.script,te->pos,nd->u.scr.rid,nd->id,ScriptObservabilityCategory::Timer);
 
 	nd->u.scr.rid = old_rid; // Attached-rid should be restored anyway.
 	if( sd )
@@ -2268,7 +2268,7 @@ int32 npc_click(map_session_data* sd, npc_data* nd)
 #endif
 			break;
 		case NPCTYPE_SCRIPT:
-			run_script(nd->u.scr.script,0,sd->id,nd->id);
+			run_script(nd->u.scr.script,0,sd->id,nd->id,ScriptObservabilityCategory::Npc);
 			break;
 		case NPCTYPE_TOMB:
 			run_tomb(sd,nd);
@@ -4767,7 +4767,7 @@ int32 npc_instanceinit(npc_data* nd)
 	snprintf(evname, ARRAYLENGTH(evname), "%s::%s", nd->exname, script_config.instance_init_event_name);
 
 	if( ( ev = (struct event_data*)strdb_get(ev_db, evname) ) )
-		run_script(nd->u.scr.script,ev->pos,0,nd->id);
+		run_script(nd->u.scr.script,ev->pos,0,nd->id,ScriptObservabilityCategory::Timer);
 
 	return 0;
 }
@@ -4780,7 +4780,7 @@ int32 npc_instancedestroy(npc_data* nd)
 	snprintf(evname, ARRAYLENGTH(evname), "%s::%s", nd->exname, script_config.instance_destroy_event_name);
 
 	if( ( ev = (struct event_data*)strdb_get(ev_db, evname) ) )
-		run_script(nd->u.scr.script,ev->pos,0,nd->id);
+		run_script(nd->u.scr.script,ev->pos,0,nd->id,ScriptObservabilityCategory::Timer);
 
 	return 0;
 }
