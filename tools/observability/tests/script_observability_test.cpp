@@ -179,6 +179,32 @@ void test_record_slice_per_category(){
 	CHECK( item.commands_max_per_slice == 10 );
 }
 
+void test_instance_category_mapping(){
+	ScriptObservabilitySnapshot snapshot;
+
+	snapshot.record_slice( ScriptObservabilityCategory::Instance, 12, 4, false, 25 );
+
+	const ScriptObservabilityCounters& inst = snapshot.by_category[static_cast<size_t>( ScriptObservabilityCategory::Instance )];
+	CHECK( inst.execution_slices_total == 1 );
+	CHECK( snapshot.aggregate.execution_slices_total == 1 );
+	CHECK( std::strcmp( script_observability_category_label( ScriptObservabilityCategory::Instance ), "instance" ) == 0 );
+}
+
+void test_label_boundary_safety(){
+	// Every valid enum value must map to one of the approved labels.
+	CHECK( std::strcmp( script_observability_category_label( ScriptObservabilityCategory::Npc ), "npc" ) == 0 );
+	CHECK( std::strcmp( script_observability_category_label( ScriptObservabilityCategory::Event ), "event" ) == 0 );
+	CHECK( std::strcmp( script_observability_category_label( ScriptObservabilityCategory::Timer ), "timer" ) == 0 );
+	CHECK( std::strcmp( script_observability_category_label( ScriptObservabilityCategory::Item ), "item" ) == 0 );
+	CHECK( std::strcmp( script_observability_category_label( ScriptObservabilityCategory::Skill ), "skill" ) == 0 );
+	CHECK( std::strcmp( script_observability_category_label( ScriptObservabilityCategory::Quest ), "quest" ) == 0 );
+	CHECK( std::strcmp( script_observability_category_label( ScriptObservabilityCategory::Instance ), "instance" ) == 0 );
+	CHECK( std::strcmp( script_observability_category_label( ScriptObservabilityCategory::Unknown ), "unknown" ) == 0 );
+
+	// Values outside the approved set must never leak a dynamic label.
+	CHECK( std::strcmp( script_observability_category_label( static_cast<ScriptObservabilityCategory>( 255 ) ), "unknown" ) == 0 );
+}
+
 void test_invalid_category_fallback(){
 	ScriptObservabilitySnapshot snapshot;
 
@@ -337,6 +363,8 @@ int main(){
 	test_saturating_add();
 	test_record_slice_aggregate();
 	test_record_slice_per_category();
+	test_instance_category_mapping();
+	test_label_boundary_safety();
 	test_invalid_category_fallback();
 	test_counter_saturation();
 	test_rendering_deterministic_and_complete();
