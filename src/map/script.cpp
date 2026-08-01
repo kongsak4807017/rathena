@@ -9,6 +9,7 @@
 
 #include "script.hpp"
 #include "script_observability.hpp"
+#include "script_observability_internal.hpp"
 
 #include <cerrno>
 #include <cmath>
