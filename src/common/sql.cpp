@@ -273,20 +273,42 @@ int32 Sql_QueryV(Sql* self, const char* query, va_list args)
 	Sql_FreeResult(self);
 	StringBuf_Clear(&self->buf);
 	StringBuf_Vprintf(&self->buf, query, args);
+
+	int32 result = SQL_ERROR;
+	t_tick start = 0;
+	bool measure = sql_observability_enabled();
+	if( measure ){
+		start = gettick_nocache();
+	}
+
 	if( mysql_real_query(&self->handle, StringBuf_Value(&self->buf), (unsigned long)StringBuf_Length(&self->buf)) )
 	{
 		ShowSQL("DB error - %s\n", mysql_error(&self->handle));
 		ra_mysql_error_handler(mysql_errno(&self->handle));
-		return SQL_ERROR;
+		result = SQL_ERROR;
 	}
-	self->result = mysql_store_result(&self->handle);
-	if( mysql_errno(&self->handle) != 0 )
+	else
 	{
-		ShowSQL("DB error - %s\n", mysql_error(&self->handle));
-		ra_mysql_error_handler(mysql_errno(&self->handle));
-		return SQL_ERROR;
+		self->result = mysql_store_result(&self->handle);
+		if( mysql_errno(&self->handle) != 0 )
+		{
+			ShowSQL("DB error - %s\n", mysql_error(&self->handle));
+			ra_mysql_error_handler(mysql_errno(&self->handle));
+			result = SQL_ERROR;
+		}
+		else
+		{
+			result = SQL_SUCCESS;
+		}
 	}
-	return SQL_SUCCESS;
+
+	if( measure ){
+		t_tick end = gettick_nocache();
+		uint64_t duration_ms = (end >= start) ? static_cast<uint64_t>(end - start) : 0;
+		sql_observability_record_query(duration_ms, result == SQL_SUCCESS);
+	}
+
+	return result;
 }
 
 
@@ -300,20 +322,42 @@ int32 Sql_QueryStr(Sql* self, const char* query)
 	Sql_FreeResult(self);
 	StringBuf_Clear(&self->buf);
 	StringBuf_AppendStr(&self->buf, query);
+
+	int32 result = SQL_ERROR;
+	t_tick start = 0;
+	bool measure = sql_observability_enabled();
+	if( measure ){
+		start = gettick_nocache();
+	}
+
 	if( mysql_real_query(&self->handle, StringBuf_Value(&self->buf), (unsigned long)StringBuf_Length(&self->buf)) )
 	{
 		ShowSQL("DB error - %s\n", mysql_error(&self->handle));
 		ra_mysql_error_handler(mysql_errno(&self->handle));
-		return SQL_ERROR;
+		result = SQL_ERROR;
 	}
-	self->result = mysql_store_result(&self->handle);
-	if( mysql_errno(&self->handle) != 0 )
+	else
 	{
-		ShowSQL("DB error - %s\n", mysql_error(&self->handle));
-		ra_mysql_error_handler(mysql_errno(&self->handle));
-		return SQL_ERROR;
+		self->result = mysql_store_result(&self->handle);
+		if( mysql_errno(&self->handle) != 0 )
+		{
+			ShowSQL("DB error - %s\n", mysql_error(&self->handle));
+			ra_mysql_error_handler(mysql_errno(&self->handle));
+			result = SQL_ERROR;
+		}
+		else
+		{
+			result = SQL_SUCCESS;
+		}
 	}
-	return SQL_SUCCESS;
+
+	if( measure ){
+		t_tick end = gettick_nocache();
+		uint64_t duration_ms = (end >= start) ? static_cast<uint64_t>(end - start) : 0;
+		sql_observability_record_query(duration_ms, result == SQL_SUCCESS);
+	}
+
+	return result;
 }
 
 
