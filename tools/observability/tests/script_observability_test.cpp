@@ -141,6 +141,102 @@ void test_saturating_add(){
 	CHECK( script_observability_saturating_add( 0, std::numeric_limits<uint64_t>::max() ) == std::numeric_limits<uint64_t>::max() );
 }
 
+void test_record_slice_aggregate(){
+	ScriptObservabilitySnapshot snapshot;
+
+	snapshot.record_slice( ScriptObservabilityCategory::Npc, 10, 5, false, 25 );
+	snapshot.record_slice( ScriptObservabilityCategory::Event, 25, 12, false, 25 );
+	snapshot.record_slice( ScriptObservabilityCategory::Timer, 30, 20, true, 25 );
+
+	CHECK( snapshot.aggregate.execution_slices_total == 3 );
+	CHECK( snapshot.aggregate.execution_failures_total == 1 );
+	CHECK( snapshot.aggregate.slow_execution_slices_total == 2 );
+	CHECK( snapshot.aggregate.execution_duration_last_ms == 30 );
+	CHECK( snapshot.aggregate.execution_duration_max_ms == 30 );
+	CHECK( snapshot.aggregate.commands_total == 37 );
+	CHECK( snapshot.aggregate.commands_max_per_slice == 20 );
+}
+
+void test_record_slice_per_category(){
+	ScriptObservabilitySnapshot snapshot;
+
+	snapshot.record_slice( ScriptObservabilityCategory::Item, 15, 8, false, 25 );
+	snapshot.record_slice( ScriptObservabilityCategory::Item, 35, 10, true, 25 );
+
+	const ScriptObservabilityCounters& item = snapshot.by_category[static_cast<size_t>( ScriptObservabilityCategory::Item )];
+	CHECK( item.execution_slices_total == 2 );
+	CHECK( item.execution_failures_total == 1 );
+	CHECK( item.slow_execution_slices_total == 1 );
+	CHECK( item.execution_duration_last_ms == 35 );
+	CHECK( item.execution_duration_max_ms == 35 );
+	CHECK( item.commands_total == 18 );
+	CHECK( item.commands_max_per_slice == 10 );
+}
+
+void test_invalid_category_fallback(){
+	ScriptObservabilitySnapshot snapshot;
+
+	snapshot.record_slice( static_cast<ScriptObservabilityCategory>( 255 ), 10, 1, false, 25 );
+
+	CHECK( snapshot.by_category[static_cast<size_t>( ScriptObservabilityCategory::Unknown )].execution_slices_total == 1 );
+	CHECK( snapshot.aggregate.execution_slices_total == 1 );
+}
+
+void test_counter_saturation(){
+	ScriptObservabilityCounters counters;
+
+	counters.execution_slices_total = std::numeric_limits<uint64_t>::max() - 1;
+	counters.record_slice( 10, 1, false, 25 );
+	counters.record_slice( 10, 1, false, 25 );
+	CHECK( counters.execution_slices_total == std::numeric_limits<uint64_t>::max() );
+
+	counters.commands_total = std::numeric_limits<uint64_t>::max() - 5;
+	counters.record_slice( 10, 10, false, 25 );
+	CHECK( counters.commands_total == std::numeric_limits<uint64_t>::max() );
+}
+
+void test_rendering_deterministic_and_complete(){
+	ScriptObservabilitySnapshot snapshot;
+
+	snapshot.record_slice( ScriptObservabilityCategory::Npc, 25, 17, false, 25 );
+	snapshot.record_slice( ScriptObservabilityCategory::Event, 24, 3, true, 25 );
+	snapshot.record_slice( ScriptObservabilityCategory::Timer, 26, 9, false, 25 );
+
+	const std::string out = script_observability_render_prometheus( snapshot );
+
+	CHECK( out.find( "rathena_script_execution_slices_total " ) != std::string::npos );
+	CHECK( out.find( "rathena_script_execution_failures_total " ) != std::string::npos );
+	CHECK( out.find( "rathena_script_slow_execution_slices_total " ) != std::string::npos );
+	CHECK( out.find( "rathena_script_execution_duration_last_milliseconds " ) != std::string::npos );
+	CHECK( out.find( "rathena_script_execution_duration_max_milliseconds " ) != std::string::npos );
+	CHECK( out.find( "rathena_script_commands_total " ) != std::string::npos );
+	CHECK( out.find( "rathena_script_commands_max_per_slice " ) != std::string::npos );
+
+	CHECK( out.find( "rathena_script_execution_slices_total{category=\"npc\"}" ) != std::string::npos );
+	CHECK( out.find( "rathena_script_execution_failures_total{category=\"event\"}" ) != std::string::npos );
+	CHECK( out.find( "rathena_script_slow_execution_slices_total{category=\"timer\"}" ) != std::string::npos );
+	CHECK( out.find( "rathena_script_commands_total{category=\"npc\"}" ) != std::string::npos );
+	CHECK( out.find( "rathena_script_execution_duration_max_milliseconds{category=\"timer\"}" ) != std::string::npos );
+
+	// Deterministic: render twice and compare.
+	CHECK( script_observability_render_prometheus( snapshot ) == out );
+}
+
+void test_privacy_sentinel_scan(){
+	ScriptObservabilitySnapshot snapshot;
+
+	snapshot.record_slice( ScriptObservabilityCategory::Npc, 10, 1, false, 25 );
+
+	const std::string out = script_observability_render_prometheus( snapshot );
+
+	CHECK( out.find( "Prontera" ) == std::string::npos );
+	CHECK( out.find( "npc_name" ) == std::string::npos );
+	CHECK( out.find( "OnLabel" ) == std::string::npos );
+	CHECK( out.find( ".txt" ) == std::string::npos );
+	CHECK( out.find( "mes " ) == std::string::npos );
+	CHECK( out.find( "account_id" ) == std::string::npos );
+}
+
 } // namespace
 
 int main(){
@@ -149,6 +245,12 @@ int main(){
 	test_is_slow();
 	test_category_labels();
 	test_saturating_add();
+	test_record_slice_aggregate();
+	test_record_slice_per_category();
+	test_invalid_category_fallback();
+	test_counter_saturation();
+	test_rendering_deterministic_and_complete();
+	test_privacy_sentinel_scan();
 
 	if( g_failures > 0 ){
 		std::fprintf( stderr, "%d test(s) failed.\n", g_failures );
