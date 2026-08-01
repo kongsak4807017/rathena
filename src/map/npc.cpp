@@ -4767,7 +4767,7 @@ int32 npc_instanceinit(npc_data* nd)
 	snprintf(evname, ARRAYLENGTH(evname), "%s::%s", nd->exname, script_config.instance_init_event_name);
 
 	if( ( ev = (struct event_data*)strdb_get(ev_db, evname) ) )
-		run_script(nd->u.scr.script,ev->pos,0,nd->id,ScriptObservabilityCategory::Timer);
+		run_script(nd->u.scr.script,ev->pos,0,nd->id,ScriptObservabilityCategory::Instance);
 
 	return 0;
 }
@@ -4780,7 +4780,7 @@ int32 npc_instancedestroy(npc_data* nd)
 	snprintf(evname, ARRAYLENGTH(evname), "%s::%s", nd->exname, script_config.instance_destroy_event_name);
 
 	if( ( ev = (struct event_data*)strdb_get(ev_db, evname) ) )
-		run_script(nd->u.scr.script,ev->pos,0,nd->id,ScriptObservabilityCategory::Timer);
+		run_script(nd->u.scr.script,ev->pos,0,nd->id,ScriptObservabilityCategory::Instance);
 
 	return 0;
 }
