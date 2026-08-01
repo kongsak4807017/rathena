@@ -5,36 +5,46 @@ on:
     paths:
       - "tools/observability/**"
       - "tools/observability/tests/sql_observability_test.cpp"
+      - "tools/observability/tests/script_observability_test.cpp"
       - "src/map/core_observability*"
       - "src/map/core_observability.cpp"
       - "src/map/packet_observability*"
+      - "src/map/script_observability*"
       - "src/common/sql_observability*"
       - "src/common/sql.cpp"
       - "src/common/sql.hpp"
       - "src/login/login.cpp"
       - "src/char/char.cpp"
       - "src/map/map.cpp"
+      - "src/map/script.cpp"
+      - "src/map/script.hpp"
       - "src/web/web.cpp"
       - ".github/workflows/observability-tests.yml"
       - "docs/observability/SQL_OBSERVABILITY_V1.md"
+      - "docs/observability/SCRIPT_OBSERVABILITY_V1.md"
   push:
     branches:
       - master
     paths:
       - "tools/observability/**"
       - "tools/observability/tests/sql_observability_test.cpp"
+      - "tools/observability/tests/script_observability_test.cpp"
       - "src/map/core_observability*"
       - "src/map/core_observability.cpp"
       - "src/map/packet_observability*"
+      - "src/map/script_observability*"
       - "src/common/sql_observability*"
       - "src/common/sql.cpp"
       - "src/common/sql.hpp"
       - "src/login/login.cpp"
       - "src/char/char.cpp"
       - "src/map/map.cpp"
+      - "src/map/script.cpp"
+      - "src/map/script.hpp"
       - "src/web/web.cpp"
       - ".github/workflows/observability-tests.yml"
       - "docs/observability/SQL_OBSERVABILITY_V1.md"
+      - "docs/observability/SCRIPT_OBSERVABILITY_V1.md"
 
 permissions:
   contents: read
@@ -81,6 +91,9 @@ jobs:
       - name: Build and run SQL observability C++ runtime tests
         if: runner.os != 'Windows'
         run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -DRATHENA_SQL_OBSERVABILITY_TESTING -Isrc -Isrc/common tools/observability/tests/sql_observability_test.cpp -o sql_observability_test_runtime && ./sql_observability_test_runtime
+      - name: Build and run script observability C++ tests
+        if: runner.os != 'Windows'
+        run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -Isrc/map tools/observability/tests/script_observability_test.cpp -o script_observability_test && ./script_observability_test
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
       - name: Build and run core observability C++ tests (MSVC)
@@ -95,3 +108,6 @@ jobs:
       - name: Build and run SQL observability C++ runtime tests (MSVC)
         if: runner.os == 'Windows'
         run: cl /std:c++17 /EHsc /W4 /WX /DRATHENA_SQL_OBSERVABILITY_TESTING /D_CRT_SECURE_NO_WARNINGS /Isrc /Isrc\common tools\observability\tests\sql_observability_test.cpp /Fe:sql_observability_test_runtime.exe && .\sql_observability_test_runtime.exe
+      - name: Build and run script observability C++ tests (MSVC)
+        if: runner.os == 'Windows'
+        run: cl /std:c++17 /EHsc /W4 /WX /Isrc\map tools\observability\tests\script_observability_test.cpp /Fe:script_observability_test.exe && .\script_observability_test.exe
