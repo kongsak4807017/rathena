@@ -9,6 +9,7 @@
 #include "cli.hpp"
 #include "malloc.hpp"
 #include "showmsg.hpp"
+#include "sql_observability.hpp"
 #include "timer.hpp"
 
 // MySQL 8.0 or later removed my_bool typedef.
@@ -96,6 +97,7 @@ int32 Sql_Connect(Sql* self, const char* user, const char* passwd, const char* h
 	if( !mysql_real_connect(&self->handle, host, user, passwd, db, (uint32)port, nullptr/*unix_socket*/, 0/*clientflag*/) )
 	{
 		ShowSQL("%s\n", mysql_error(&self->handle));
+		sql_observability_record_connect(false);
 		return SQL_ERROR;
 	}
 
@@ -103,9 +105,11 @@ int32 Sql_Connect(Sql* self, const char* user, const char* passwd, const char* h
 	if( self->keepalive == INVALID_TIMER )
 	{
 		ShowSQL("Failed to establish keepalive for DB connection!\n");
+		sql_observability_record_connect(false);
 		return SQL_ERROR;
 	}
 
+	sql_observability_record_connect(true);
 	return SQL_SUCCESS;
 }
 
@@ -176,8 +180,11 @@ int32 Sql_SetEncoding(Sql* self, const char* encoding)
 /// Pings the connection.
 int32 Sql_Ping(Sql* self)
 {
-	if( self && mysql_ping(&self->handle) == 0 )
+	if( self && mysql_ping(&self->handle) == 0 ){
+		sql_observability_record_ping(true);
 		return SQL_SUCCESS;
+	}
+	sql_observability_record_ping(false);
 	return SQL_ERROR;
 }
 
@@ -961,6 +968,7 @@ SqlStmt::~SqlStmt(){
 void ra_mysql_error_handler(uint32 ecode) {
 	switch( ecode ) {
 		case 2003:// Can't connect to MySQL (this error only happens here when failing to reconnect)
+			sql_observability_record_reconnect();
 			if( mysql_reconnect_type == 1 ) {
 				static uint32 retry = 1;
 				if( ++retry > mysql_reconnect_count ) {
