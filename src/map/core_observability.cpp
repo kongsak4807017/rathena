@@ -11,6 +11,7 @@
 
 #include "core_observability_internal.hpp"
 #include "map.hpp"
+#include "packet_observability.hpp"
 
 // Included last on purpose: on Windows the rAthena common headers define
 // their own <Windows.h> settings (common/winapi.hpp), this header must not
@@ -142,13 +143,17 @@ bool write_snapshot( t_tick tick ){
 		maps.push_back( std::move( counts ) );
 	}
 
-	const std::string exposition = core_observability::render_metrics( values, maps );
+	std::string output = core_observability::render_metrics( values, maps );
+
+	if( packet_observability_enabled() ){
+		output += packet_observability_render_snapshot();
+	}
 
 	std::string error;
 	bool written = core_observability::ensure_parent_directory( state.output_path, &error );
 
 	if( written ){
-		written = core_observability::atomic_write_text_file( state.output_path, exposition, &error );
+		written = core_observability::atomic_write_text_file( state.output_path, output, &error );
 	}
 
 	const t_tick duration = gettick_nocache() - start;
@@ -170,6 +175,11 @@ bool write_snapshot( t_tick tick ){
 
 void core_observability_init(){
 	using namespace core_observability_internal;
+
+	// Initialize packet observability first so its configuration is parsed
+	// regardless of whether core observability itself is enabled. Packet
+	// counters can accumulate even when the core timer/writer is disabled.
+	packet_observability_init();
 
 	// Guard against duplicate initialization (e.g. after script reloads).
 	if( state.enabled ){
@@ -212,10 +222,19 @@ void core_observability_init(){
 void core_observability_final(){
 	using namespace core_observability_internal;
 
+	// Write a final snapshot on graceful shutdown so short-lived or
+	// --run-once invocations still export accumulated packet metrics.
+	if( state.enabled ){
+		write_snapshot( gettick_nocache() );
+	}
+
 	if( state.timer_id != INVALID_TIMER ){
 		delete_timer( state.timer_id, core_observability_timer );
 		state.timer_id = INVALID_TIMER;
 	}
 
 	state.enabled = false;
+
+	// Tear down packet observability after the core timer has been cleaned up.
+	packet_observability_final();
 }
