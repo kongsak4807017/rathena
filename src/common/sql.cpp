@@ -9,6 +9,7 @@
 #include "cli.hpp"
 #include "malloc.hpp"
 #include "showmsg.hpp"
+#include "sql_observability.hpp"
 #include "timer.hpp"
 
 // MySQL 8.0 or later removed my_bool typedef.
@@ -96,6 +97,7 @@ int32 Sql_Connect(Sql* self, const char* user, const char* passwd, const char* h
 	if( !mysql_real_connect(&self->handle, host, user, passwd, db, (uint32)port, nullptr/*unix_socket*/, 0/*clientflag*/) )
 	{
 		ShowSQL("%s\n", mysql_error(&self->handle));
+		sql_observability_record_connect(false);
 		return SQL_ERROR;
 	}
 
@@ -103,9 +105,11 @@ int32 Sql_Connect(Sql* self, const char* user, const char* passwd, const char* h
 	if( self->keepalive == INVALID_TIMER )
 	{
 		ShowSQL("Failed to establish keepalive for DB connection!\n");
+		sql_observability_record_connect(false);
 		return SQL_ERROR;
 	}
 
+	sql_observability_record_connect(true);
 	return SQL_SUCCESS;
 }
 
@@ -176,8 +180,11 @@ int32 Sql_SetEncoding(Sql* self, const char* encoding)
 /// Pings the connection.
 int32 Sql_Ping(Sql* self)
 {
-	if( self && mysql_ping(&self->handle) == 0 )
+	if( self && mysql_ping(&self->handle) == 0 ){
+		sql_observability_record_ping(true);
 		return SQL_SUCCESS;
+	}
+	sql_observability_record_ping(false);
 	return SQL_ERROR;
 }
 
@@ -266,20 +273,42 @@ int32 Sql_QueryV(Sql* self, const char* query, va_list args)
 	Sql_FreeResult(self);
 	StringBuf_Clear(&self->buf);
 	StringBuf_Vprintf(&self->buf, query, args);
+
+	int32 result = SQL_ERROR;
+	t_tick start = 0;
+	bool measure = sql_observability_enabled();
+	if( measure ){
+		start = gettick_nocache();
+	}
+
 	if( mysql_real_query(&self->handle, StringBuf_Value(&self->buf), (unsigned long)StringBuf_Length(&self->buf)) )
 	{
 		ShowSQL("DB error - %s\n", mysql_error(&self->handle));
 		ra_mysql_error_handler(mysql_errno(&self->handle));
-		return SQL_ERROR;
+		result = SQL_ERROR;
 	}
-	self->result = mysql_store_result(&self->handle);
-	if( mysql_errno(&self->handle) != 0 )
+	else
 	{
-		ShowSQL("DB error - %s\n", mysql_error(&self->handle));
-		ra_mysql_error_handler(mysql_errno(&self->handle));
-		return SQL_ERROR;
+		self->result = mysql_store_result(&self->handle);
+		if( mysql_errno(&self->handle) != 0 )
+		{
+			ShowSQL("DB error - %s\n", mysql_error(&self->handle));
+			ra_mysql_error_handler(mysql_errno(&self->handle));
+			result = SQL_ERROR;
+		}
+		else
+		{
+			result = SQL_SUCCESS;
+		}
 	}
-	return SQL_SUCCESS;
+
+	if( measure ){
+		t_tick end = gettick_nocache();
+		uint64_t duration_ms = (end >= start) ? static_cast<uint64_t>(end - start) : 0;
+		sql_observability_record_query(duration_ms, result == SQL_SUCCESS);
+	}
+
+	return result;
 }
 
 
@@ -293,20 +322,42 @@ int32 Sql_QueryStr(Sql* self, const char* query)
 	Sql_FreeResult(self);
 	StringBuf_Clear(&self->buf);
 	StringBuf_AppendStr(&self->buf, query);
+
+	int32 result = SQL_ERROR;
+	t_tick start = 0;
+	bool measure = sql_observability_enabled();
+	if( measure ){
+		start = gettick_nocache();
+	}
+
 	if( mysql_real_query(&self->handle, StringBuf_Value(&self->buf), (unsigned long)StringBuf_Length(&self->buf)) )
 	{
 		ShowSQL("DB error - %s\n", mysql_error(&self->handle));
 		ra_mysql_error_handler(mysql_errno(&self->handle));
-		return SQL_ERROR;
+		result = SQL_ERROR;
 	}
-	self->result = mysql_store_result(&self->handle);
-	if( mysql_errno(&self->handle) != 0 )
+	else
 	{
-		ShowSQL("DB error - %s\n", mysql_error(&self->handle));
-		ra_mysql_error_handler(mysql_errno(&self->handle));
-		return SQL_ERROR;
+		self->result = mysql_store_result(&self->handle);
+		if( mysql_errno(&self->handle) != 0 )
+		{
+			ShowSQL("DB error - %s\n", mysql_error(&self->handle));
+			ra_mysql_error_handler(mysql_errno(&self->handle));
+			result = SQL_ERROR;
+		}
+		else
+		{
+			result = SQL_SUCCESS;
+		}
 	}
-	return SQL_SUCCESS;
+
+	if( measure ){
+		t_tick end = gettick_nocache();
+		uint64_t duration_ms = (end >= start) ? static_cast<uint64_t>(end - start) : 0;
+		sql_observability_record_query(duration_ms, result == SQL_SUCCESS);
+	}
+
+	return result;
 }
 
 
@@ -736,24 +787,43 @@ int32 SqlStmt::BindParam(size_t idx, enum SqlDataType buffer_type, void* buffer,
 int32 SqlStmt::Execute(){
 	this->FreeResult();
 
+	int32 result = SQL_ERROR;
+	t_tick start = 0;
+	bool measure = sql_observability_enabled();
+	if( measure ){
+		start = gettick_nocache();
+	}
+
 	if( ( this->bind_params && mysql_stmt_bind_param( this->stmt, this->params ) ) ||
 		mysql_stmt_execute( this->stmt ) )
 	{
 		ShowSQL("DB error - %s\n", mysql_stmt_error(this->stmt));
 		ra_mysql_error_handler(mysql_stmt_errno(this->stmt));
-		return SQL_ERROR;
+		result = SQL_ERROR;
+	}
+	else
+	{
+		this->bind_columns = false;
+
+		// store all the data
+		if( mysql_stmt_store_result( this->stmt ) ){
+			ShowSQL( "DB error - %s\n", mysql_stmt_error( this->stmt ) );
+			ra_mysql_error_handler( mysql_stmt_errno( this->stmt ) );
+			result = SQL_ERROR;
+		}
+		else
+		{
+			result = SQL_SUCCESS;
+		}
 	}
 
-	this->bind_columns = false;
-
-	// store all the data
-	if( mysql_stmt_store_result( this->stmt ) ){
-		ShowSQL( "DB error - %s\n", mysql_stmt_error( this->stmt ) );
-		ra_mysql_error_handler( mysql_stmt_errno( this->stmt ) );
-		return SQL_ERROR;
+	if( measure ){
+		t_tick end = gettick_nocache();
+		uint64_t duration_ms = (end >= start) ? static_cast<uint64_t>(end - start) : 0;
+		sql_observability_record_prepared(duration_ms, result == SQL_SUCCESS);
 	}
 
-	return SQL_SUCCESS;
+	return result;
 }
 
 
@@ -961,6 +1031,7 @@ SqlStmt::~SqlStmt(){
 void ra_mysql_error_handler(uint32 ecode) {
 	switch( ecode ) {
 		case 2003:// Can't connect to MySQL (this error only happens here when failing to reconnect)
+			sql_observability_record_reconnect();
 			if( mysql_reconnect_type == 1 ) {
 				static uint32 retry = 1;
 				if( ++retry > mysql_reconnect_count ) {

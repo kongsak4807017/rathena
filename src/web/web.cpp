@@ -23,6 +23,7 @@
 #include <common/timer.hpp>
 #include <common/utilities.hpp>
 #include <common/utils.hpp>
+#include <common/sql_observability.hpp>
 #include <config/core.hpp>
 
 #include "charconfig_controller.hpp"
@@ -463,6 +464,9 @@ bool WebServer::initialize( int32 argc, char* argv[] ){
 	INTER_CONF_NAME="conf/inter_athena.conf";
 
 	safestrncpy(console_log_filepath, "./log/web-msg_log.log", sizeof(console_log_filepath));
+
+	sql_observability_init();
+	sql_observability_set_subsystem( SqlObservabilitySubsystem::Web );
 
 	// read web-server configuration
 	web_set_defaults();
