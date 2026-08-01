@@ -131,6 +131,36 @@ void test_subsystem_labels(){
 	CHECK( std::strcmp( sql_observability_subsystem_label( static_cast<SqlObservabilitySubsystem>( 6 ) ), "unknown" ) == 0 );
 }
 
+void test_subsystem_capacity_clamp(){
+	// The documented max-subsystems clamp is [4, 64]; verify the parser obeys it.
+	CHECK( sql_observability_parse_u32( "0", 16, 4, 64 ) == 4 );
+	CHECK( sql_observability_parse_u32( "3", 16, 4, 64 ) == 4 );
+	CHECK( sql_observability_parse_u32( "4", 16, 4, 64 ) == 4 );
+	CHECK( sql_observability_parse_u32( "16", 16, 4, 64 ) == 16 );
+	CHECK( sql_observability_parse_u32( "64", 16, 4, 64 ) == 64 );
+	CHECK( sql_observability_parse_u32( "65", 16, 4, 64 ) == 64 );
+	CHECK( sql_observability_parse_u32( "99999", 16, 4, 64 ) == 64 );
+}
+
+void test_render_approved_subsystem_labels(){
+	SqlObservabilitySnapshot snapshot;
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Login, 1, true, 50 );
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Char, 1, true, 50 );
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Map, 1, true, 50 );
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Log, 1, true, 50 );
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Web, 1, true, 50 );
+	snapshot.queries.record_query( SqlObservabilitySubsystem::Unknown, 1, true, 50 );
+
+	const std::string out = sql_observability_render_prometheus( snapshot );
+
+	CHECK( out.find( "{subsystem=\"login\"}" ) != std::string::npos );
+	CHECK( out.find( "{subsystem=\"char\"}" ) != std::string::npos );
+	CHECK( out.find( "{subsystem=\"map\"}" ) != std::string::npos );
+	CHECK( out.find( "{subsystem=\"log\"}" ) != std::string::npos );
+	CHECK( out.find( "{subsystem=\"web\"}" ) != std::string::npos );
+	CHECK( out.find( "{subsystem=\"unknown\"}" ) != std::string::npos );
+}
+
 void test_saturating_add(){
 	CHECK( sql_observability_saturating_add( 5, 7 ) == 12 );
 	CHECK( sql_observability_saturating_add( std::numeric_limits<uint64_t>::max() - 1, 5 ) == std::numeric_limits<uint64_t>::max() );
@@ -265,6 +295,16 @@ void test_runtime_enabled_init(){
 	CHECK( snapshot.queries.aggregate.attempts_total == 1 );
 	CHECK( snapshot.queries.aggregate.failures_total == 0 );
 	CHECK( snapshot.queries.aggregate.slow_total == 0 );
+}
+
+void test_runtime_max_subsystems_storage(){
+	// The runtime seam must retain the configured capacity so it can be used
+	// for future bounded subsystem storage without changing behavior today.
+	sql_observability_test_reset( true, 50, 8 );
+	CHECK( sql_observability_enabled() == true );
+
+	SqlObservabilitySnapshot snapshot = sql_observability_test_snapshot();
+	CHECK( snapshot.queries.by_subsystem.size() == 6 );
 }
 
 void test_runtime_idempotent_init_final(){
@@ -412,6 +452,8 @@ int main(){
 	test_parse_u32();
 	test_is_slow();
 	test_subsystem_labels();
+	test_subsystem_capacity_clamp();
+	test_render_approved_subsystem_labels();
 	test_saturating_add();
 	test_counter_saturation();
 	test_subsystem_admission();
@@ -422,6 +464,7 @@ int main(){
 #ifdef RATHENA_SQL_OBSERVABILITY_TESTING
 	test_runtime_disabled_init();
 	test_runtime_enabled_init();
+	test_runtime_max_subsystems_storage();
 	test_runtime_idempotent_init_final();
 	test_runtime_default_subsystem();
 	test_runtime_subsystem_selection();

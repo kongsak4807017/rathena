@@ -4,21 +4,37 @@ on:
   pull_request:
     paths:
       - "tools/observability/**"
+      - "tools/observability/tests/sql_observability_test.cpp"
       - "src/map/core_observability*"
+      - "src/map/core_observability.cpp"
       - "src/map/packet_observability*"
       - "src/common/sql_observability*"
       - "src/common/sql.cpp"
+      - "src/common/sql.hpp"
+      - "src/login/login.cpp"
+      - "src/char/char.cpp"
+      - "src/map/map.cpp"
+      - "src/web/web.cpp"
       - ".github/workflows/observability-tests.yml"
+      - "docs/observability/SQL_OBSERVABILITY_V1.md"
   push:
     branches:
       - master
     paths:
       - "tools/observability/**"
+      - "tools/observability/tests/sql_observability_test.cpp"
       - "src/map/core_observability*"
+      - "src/map/core_observability.cpp"
       - "src/map/packet_observability*"
       - "src/common/sql_observability*"
       - "src/common/sql.cpp"
+      - "src/common/sql.hpp"
+      - "src/login/login.cpp"
+      - "src/char/char.cpp"
+      - "src/map/map.cpp"
+      - "src/web/web.cpp"
       - ".github/workflows/observability-tests.yml"
+      - "docs/observability/SQL_OBSERVABILITY_V1.md"
 
 permissions:
   contents: read
@@ -62,6 +78,9 @@ jobs:
       - name: Build and run SQL observability C++ tests
         if: runner.os != 'Windows'
         run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -Isrc/common tools/observability/tests/sql_observability_test.cpp -o sql_observability_test && ./sql_observability_test
+      - name: Build and run SQL observability C++ runtime tests
+        if: runner.os != 'Windows'
+        run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -DRATHENA_SQL_OBSERVABILITY_TESTING -Isrc -Isrc/common tools/observability/tests/sql_observability_test.cpp -o sql_observability_test_runtime && ./sql_observability_test_runtime
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
       - name: Build and run core observability C++ tests (MSVC)
@@ -73,3 +92,6 @@ jobs:
       - name: Build and run SQL observability C++ tests (MSVC)
         if: runner.os == 'Windows'
         run: cl /std:c++17 /EHsc /W4 /WX /Isrc\common tools\observability\tests\sql_observability_test.cpp /Fe:sql_observability_test.exe && .\sql_observability_test.exe
+      - name: Build and run SQL observability C++ runtime tests (MSVC)
+        if: runner.os == 'Windows'
+        run: cl /std:c++17 /EHsc /W4 /WX /DRATHENA_SQL_OBSERVABILITY_TESTING /D_CRT_SECURE_NO_WARNINGS /Isrc /Isrc\common tools\observability\tests\sql_observability_test.cpp /Fe:sql_observability_test_runtime.exe && .\sql_observability_test_runtime.exe
