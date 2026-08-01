@@ -22,6 +22,7 @@
 #include <common/timer.hpp>
 #include <common/utilities.hpp>
 #include <common/utils.hpp>
+#include <common/sql_observability.hpp>
 #include <config/core.hpp>
 
 #include "account.hpp"
@@ -853,6 +854,9 @@ void LoginServer::handle_shutdown(){
 bool LoginServer::initialize( int32 argc, char* argv[] ){
 	// Init default value
 	safestrncpy(console_log_filepath, "./log/login-msg_log.log", sizeof(console_log_filepath));
+
+	sql_observability_init();
+	sql_observability_set_subsystem( SqlObservabilitySubsystem::Login );
 
 	// initialize engine
 	accounts = account_db_sql();

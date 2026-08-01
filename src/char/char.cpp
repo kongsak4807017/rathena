@@ -27,6 +27,7 @@
 #include <common/timer.hpp>
 #include <common/utilities.hpp>
 #include <common/utils.hpp>
+#include <common/sql_observability.hpp>
 
 #include "char_clif.hpp"
 #include "char_cnslif.hpp"
@@ -3178,6 +3179,9 @@ void CharacterServer::handle_shutdown(){
 bool CharacterServer::initialize( int32 argc, char *argv[] ){
 	// Init default value
 	safestrncpy(console_log_filepath, "./log/char-msg_log.log", sizeof(console_log_filepath));
+
+	sql_observability_init();
+	sql_observability_set_subsystem( SqlObservabilitySubsystem::Char );
 
 	cli_get_options(argc,argv);
 

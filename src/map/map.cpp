@@ -22,6 +22,7 @@
 #include <common/timer.hpp>
 #include <common/utilities.hpp>
 #include <common/utils.hpp>
+#include <common/sql_observability.hpp>
 
 #include "achievement.hpp"
 #include "atcommand.hpp"
@@ -5334,6 +5335,9 @@ bool MapServer::initialize( int32 argc, char *argv[] ){
 #endif
 
 	safestrncpy(console_log_filepath, "./log/map-msg_log.log", sizeof(console_log_filepath));
+
+	sql_observability_init();
+	sql_observability_set_subsystem( SqlObservabilitySubsystem::Map );
 
 	/* Multilanguage */
 	MSG_CONF_NAME_EN = "conf/msg_conf/map_msg.conf"; // English (default)
