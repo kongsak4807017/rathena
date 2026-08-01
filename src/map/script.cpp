@@ -3639,6 +3639,7 @@ struct script_state* script_alloc_state(struct script_code* rootscript, int32 po
 	st->pos = pos;
 	st->rid = rid;
 	st->oid = oid;
+	st->observability_category = ScriptObservabilityCategory::Unknown;
 	st->sleep.timer = INVALID_TIMER;
 	st->npc_item_flag = battle_config.item_enabled_npc;
 	

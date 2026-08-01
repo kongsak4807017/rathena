@@ -14,6 +14,8 @@
 #include <common/mmo.hpp>
 #include <common/timer.hpp>
 
+#include "script_observability_pure.hpp"
+
 #define NUM_WHISPER_VAR 10
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -326,6 +328,7 @@ struct script_state {
 	//For backing up purposes
 	struct script_state *bk_st;
 	int32 bk_npcid;
+	ScriptObservabilityCategory observability_category;
 	unsigned freeloop : 1;// used by buildin_freeloop
 	unsigned op2ref : 1;// used by op_2
 	unsigned npc_item_flag : 1;
