@@ -216,6 +216,9 @@
     <ClInclude Include="packet_observability.hpp" />
     <ClInclude Include="packet_observability_internal.hpp" />
     <ClInclude Include="packet_observability_pure.hpp" />
+    <ClInclude Include="script_observability.hpp" />
+    <ClInclude Include="script_observability_internal.hpp" />
+    <ClInclude Include="script_observability_pure.hpp" />
     <ClInclude Include="date.hpp" />
     <ClInclude Include="duel.hpp" />
     <ClInclude Include="elemental.hpp" />
@@ -1510,6 +1513,7 @@
     <ClCompile Include="clif.cpp" />
     <ClCompile Include="core_observability.cpp" />
     <ClCompile Include="packet_observability.cpp" />
+    <ClCompile Include="script_observability.cpp" />
     <ClCompile Include="date.cpp" />
     <ClCompile Include="duel.cpp" />
     <ClCompile Include="elemental.cpp" />

@@ -237,6 +237,59 @@ void test_privacy_sentinel_scan(){
 	CHECK( out.find( "account_id" ) == std::string::npos );
 }
 
+#ifdef RATHENA_SCRIPT_OBSERVABILITY_TESTING
+
+void test_runtime_disabled_no_record(){
+	script_observability_test_reset( false, 25 );
+
+	script_observability_record_slice( ScriptObservabilityCategory::Npc, 100, 10, false );
+
+	const ScriptObservabilitySnapshot snapshot = script_observability_test_snapshot();
+	CHECK( snapshot.aggregate.execution_slices_total == 0 );
+}
+
+void test_runtime_enabled_record(){
+	script_observability_test_reset( true, 25 );
+
+	script_observability_record_slice( ScriptObservabilityCategory::Npc, 10, 5, false );
+	script_observability_record_slice( ScriptObservabilityCategory::Event, 30, 8, true );
+
+	const ScriptObservabilitySnapshot snapshot = script_observability_test_snapshot();
+	CHECK( snapshot.aggregate.execution_slices_total == 2 );
+	CHECK( snapshot.aggregate.execution_failures_total == 1 );
+	CHECK( snapshot.aggregate.slow_execution_slices_total == 1 );
+	CHECK( snapshot.aggregate.commands_total == 13 );
+}
+
+void test_runtime_final_resets(){
+	script_observability_test_reset( true, 25 );
+	script_observability_record_slice( ScriptObservabilityCategory::Npc, 10, 1, false );
+
+	script_observability_final();
+
+	CHECK( script_observability_enabled() == false );
+	const ScriptObservabilitySnapshot snapshot = script_observability_test_snapshot();
+	CHECK( snapshot.aggregate.execution_slices_total == 0 );
+}
+
+void test_runtime_rendering(){
+	script_observability_test_reset( true, 25 );
+	script_observability_record_slice( ScriptObservabilityCategory::Timer, 26, 3, false );
+
+	const std::string out = script_observability_render_prometheus();
+	CHECK( out.find( "rathena_script_execution_slices_total " ) != std::string::npos );
+	CHECK( out.find( "{category=\"timer\"}" ) != std::string::npos );
+}
+
+void test_runtime_disabled_rendering_empty(){
+	script_observability_test_reset( false, 25 );
+
+	const std::string out = script_observability_render_prometheus();
+	CHECK( out.find( "rathena_script_execution_slices_total 0" ) != std::string::npos );
+}
+
+#endif // RATHENA_SCRIPT_OBSERVABILITY_TESTING
+
 } // namespace
 
 int main(){
@@ -251,6 +304,14 @@ int main(){
 	test_counter_saturation();
 	test_rendering_deterministic_and_complete();
 	test_privacy_sentinel_scan();
+
+#ifdef RATHENA_SCRIPT_OBSERVABILITY_TESTING
+	test_runtime_disabled_no_record();
+	test_runtime_enabled_record();
+	test_runtime_final_resets();
+	test_runtime_rendering();
+	test_runtime_disabled_rendering_empty();
+#endif // RATHENA_SCRIPT_OBSERVABILITY_TESTING
 
 	if( g_failures > 0 ){
 		std::fprintf( stderr, "%d test(s) failed.\n", g_failures );

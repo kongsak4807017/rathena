@@ -94,6 +94,9 @@ jobs:
       - name: Build and run script observability C++ tests
         if: runner.os != 'Windows'
         run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -Isrc/map tools/observability/tests/script_observability_test.cpp -o script_observability_test && ./script_observability_test
+      - name: Build and run script observability C++ runtime tests
+        if: runner.os != 'Windows'
+        run: ${{ matrix.cxx }} -std=c++17 -Wall -Wextra -Werror -DRATHENA_SCRIPT_OBSERVABILITY_TESTING -Isrc -Isrc/common -Isrc/map tools/observability/tests/script_observability_test.cpp -o script_observability_test_runtime && ./script_observability_test_runtime
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
       - name: Build and run core observability C++ tests (MSVC)
@@ -111,3 +114,6 @@ jobs:
       - name: Build and run script observability C++ tests (MSVC)
         if: runner.os == 'Windows'
         run: cl /std:c++17 /EHsc /W4 /WX /Isrc\map tools\observability\tests\script_observability_test.cpp /Fe:script_observability_test.exe && .\script_observability_test.exe
+      - name: Build and run script observability C++ runtime tests (MSVC)
+        if: runner.os == 'Windows'
+        run: cl /std:c++17 /EHsc /W4 /WX /DRATHENA_SCRIPT_OBSERVABILITY_TESTING /D_CRT_SECURE_NO_WARNINGS /Isrc /Isrc\common /Isrc\map tools\observability\tests\script_observability_test.cpp /Fe:script_observability_test_runtime.exe && .\script_observability_test_runtime.exe
