@@ -14,6 +14,8 @@
 #include <common/mmo.hpp>
 #include <common/timer.hpp>
 
+#include "script_observability_pure.hpp"
+
 #define NUM_WHISPER_VAR 10
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -326,6 +328,7 @@ struct script_state {
 	//For backing up purposes
 	struct script_state *bk_st;
 	int32 bk_npcid;
+	ScriptObservabilityCategory observability_category;
 	unsigned freeloop : 1;// used by buildin_freeloop
 	unsigned op2ref : 1;// used by op_2
 	unsigned npc_item_flag : 1;
@@ -2307,7 +2310,7 @@ void script_warning(const char* src, const char* file, int32 start_line, const c
 bool is_number(const char *p);
 struct script_code* parse_script_( const char *src, const char *file, int32 line, int32 options, const char* src_file, int32 src_line, const char* src_func );
 #define parse_script( src, file, line, options ) parse_script_( ( src ), ( file ), ( line ), ( options ), ALC_MARK )
-void run_script(struct script_code *rootscript,int32 pos,int32 rid,int32 oid);
+void run_script(struct script_code *rootscript,int32 pos,int32 rid,int32 oid,ScriptObservabilityCategory category = ScriptObservabilityCategory::Unknown);
 
 bool set_reg_num(struct script_state* st, map_session_data* sd, int64 num, const char* name, const int64 value, struct reg_db *ref);
 bool set_reg_str(struct script_state* st, map_session_data* sd, int64 num, const char* name, const char* value, struct reg_db* ref);

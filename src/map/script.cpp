@@ -8,6 +8,8 @@
 //#define DEBUG_DUMP_STACK
 
 #include "script.hpp"
+#include "script_observability.hpp"
+#include "script_observability_internal.hpp"
 
 #include <cerrno>
 #include <cmath>
@@ -3639,6 +3641,7 @@ struct script_state* script_alloc_state(struct script_code* rootscript, int32 po
 	st->pos = pos;
 	st->rid = rid;
 	st->oid = oid;
+	st->observability_category = ScriptObservabilityCategory::Unknown;
 	st->sleep.timer = INVALID_TIMER;
 	st->npc_item_flag = battle_config.item_enabled_npc;
 	
@@ -4183,7 +4186,7 @@ int32 run_func(struct script_state *st)
 /*==========================================
  * script execution
  *------------------------------------------*/
-void run_script(struct script_code *rootscript, int32 pos, int32 rid, int32 oid)
+void run_script(struct script_code *rootscript, int32 pos, int32 rid, int32 oid, ScriptObservabilityCategory category)
 {
 	struct script_state *st;
 
@@ -4194,6 +4197,7 @@ void run_script(struct script_code *rootscript, int32 pos, int32 rid, int32 oid)
 	//      It is unclear how that can be triggered, so it needs the be traced/checked in more detail.
 	// NOTE At the time of this change, this function wasn't capable of taking over the script state because st->scriptroot was never set.
 	st = script_alloc_state(rootscript, pos, rid, oid);
+	st->observability_category = category;
 	run_script_main(st);
 }
 
@@ -4223,6 +4227,7 @@ void script_stop_scriptinstances(struct script_code *code) {
  *------------------------------------------*/
 TIMER_FUNC(run_script_timer){
 	struct script_state *st = (struct script_state *)data;
+	st->observability_category = ScriptObservabilityCategory::Timer;
 	struct linkdb_node *node = (struct linkdb_node *)sleep_db;
 
 	// If it was a player before going to sleep and there is still a unit attached to the script
@@ -4379,6 +4384,10 @@ void run_script_main(struct script_state *st)
 	int32 gotocount = script_config.check_gotocount;
 	TBL_PC *sd;
 	struct script_stack *stack = st->stack;
+	const bool observe = script_observability_enabled();
+	const uint64_t started_ms = observe ? script_observability_clock_fn() : 0;
+	uint64_t observed_commands = 0;
+	bool observed_failure = false;
 
 	script_attach_state(st);
 
@@ -4421,6 +4430,7 @@ void run_script_main(struct script_state *st)
 					ShowError("script:run_script_main: infinity loop !\n");
 					script_reportsrc(st);
 					st->state=END;
+					observed_failure = true;
 				}
 			}
 			break;
@@ -4467,13 +4477,22 @@ void run_script_main(struct script_state *st)
 		default:
 			ShowError("script:run_script_main:unknown command : %d @ %d\n",c,st->pos);
 			st->state=END;
+			observed_failure = true;
 			break;
 		}
+		observed_commands++;
 		if( !st->freeloop && cmdcount>0 && (--cmdcount)<=0 ){
 			ShowError("script:run_script_main: infinity loop !\n");
 			script_reportsrc(st);
 			st->state=END;
+			observed_failure = true;
 		}
+	}
+
+	if( observe ){
+		const uint64_t ended_ms = script_observability_clock_fn();
+		const uint64_t duration_ms = ended_ms > started_ms ? ended_ms - started_ms : 0;
+		script_observability_record_slice( st->observability_category, duration_ms, observed_commands, observed_failure );
 	}
 
 	if(st->sleep.tick > 0) {
@@ -23389,7 +23408,7 @@ BUILDIN_FUNC(consumeitem)
 
 	// Set the item id to the item id of the script that will be executed (needed for announcement of group containers for example)
 	sd->itemid = item_data->nameid;
-	run_script( item_data->script, 0, sd->id, 0 );
+	run_script( item_data->script, 0, sd->id, 0, ScriptObservabilityCategory::Item );
 
 	if( sd->st != nullptr ){
 		script_free_state( sd->st );

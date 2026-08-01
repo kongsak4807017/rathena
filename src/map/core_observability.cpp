@@ -12,6 +12,7 @@
 #include "core_observability_internal.hpp"
 #include "map.hpp"
 #include "packet_observability.hpp"
+#include "script_observability.hpp"
 
 #include <common/sql_observability.hpp>
 
@@ -155,6 +156,10 @@ bool write_snapshot( t_tick tick ){
 		output += sql_observability_render_prometheus();
 	}
 
+	if( script_observability_enabled() ){
+		output += script_observability_render_prometheus();
+	}
+
 	std::string error;
 	bool written = core_observability::ensure_parent_directory( state.output_path, &error );
 
@@ -191,6 +196,10 @@ void core_observability_init(){
 	// regardless of whether core observability itself is enabled. Packet
 	// counters can accumulate even when the core timer/writer is disabled.
 	packet_observability_init();
+
+	// Initialize script observability so its configuration is parsed and
+	// counters can accumulate even when the core writer is disabled.
+	script_observability_init();
 
 	// Guard against duplicate initialization (e.g. after script reloads).
 	if( state.enabled ){
@@ -245,6 +254,9 @@ void core_observability_final(){
 	}
 
 	state.enabled = false;
+
+	// Tear down script observability after the final snapshot has been written.
+	script_observability_final();
 
 	// Tear down packet observability after the core timer has been cleaned up.
 	packet_observability_final();
