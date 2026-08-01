@@ -39,6 +39,9 @@
     <ClInclude Include="showmsg.hpp" />
     <ClInclude Include="socket.hpp" />
     <ClInclude Include="sql.hpp" />
+    <ClInclude Include="sql_observability.hpp" />
+    <ClInclude Include="sql_observability_internal.hpp" />
+    <ClInclude Include="sql_observability_pure.hpp" />
     <ClInclude Include="strlib.hpp" />
     <ClInclude Include="timer.hpp" />
     <ClInclude Include="utils.hpp" />
@@ -63,6 +66,7 @@
     <ClCompile Include="showmsg.cpp" />
     <ClCompile Include="socket.cpp" />
     <ClCompile Include="sql.cpp" />
+    <ClCompile Include="sql_observability.cpp" />
     <ClCompile Include="strlib.cpp" />
     <ClCompile Include="timer.cpp" />
     <ClCompile Include="utils.cpp" />

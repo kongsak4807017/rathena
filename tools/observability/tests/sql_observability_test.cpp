@@ -1,8 +1,10 @@
 // Copyright (c) rAthena Dev Teams - Licensed under GNU GPL
 // For more information, see LICENCE in the main folder
 //
-// Unit tests for the pure (dependency-free) SQL observability helpers.
-// These tests must compile and run without a running server.
+// Unit tests for the SQL observability helpers and runtime state.
+// Build without defines for the pure tests only, or with
+// -DRATHENA_SQL_OBSERVABILITY_TESTING to also compile and exercise the
+// runtime state implementation.
 
 #include <cstdio>
 #include <cstdint>
@@ -11,6 +13,35 @@
 #include <string>
 
 #include "sql_observability_pure.hpp"
+
+#ifdef RATHENA_SQL_OBSERVABILITY_TESTING
+// Stubs for rAthena logging so sql_observability.cpp can be compiled standalone
+// without linking the full common library.
+#include <cstdarg>
+
+namespace {
+
+int g_show_warning_count = 0;
+
+} // namespace
+
+static void sql_observability_test_ShowWarning( const char* fmt, ... ){
+	++g_show_warning_count;
+	(void)fmt;
+}
+
+static void sql_observability_test_ShowInfo( const char* fmt, ... ){
+	(void)fmt;
+}
+
+#define ShowWarning sql_observability_test_ShowWarning
+#define ShowInfo sql_observability_test_ShowInfo
+#define SHOWMSG_HPP
+
+#include "sql_observability.hpp"
+#include "sql_observability_internal.hpp"
+#include "sql_observability.cpp"
+#endif // RATHENA_SQL_OBSERVABILITY_TESTING
 
 namespace {
 
@@ -204,6 +235,176 @@ void test_empty_snapshot_render(){
 	CHECK( out.find( "\n\n" ) == std::string::npos );
 }
 
+#ifdef RATHENA_SQL_OBSERVABILITY_TESTING
+
+void test_runtime_disabled_init(){
+	sql_observability_test_reset( false, 50, 16 );
+	CHECK( sql_observability_enabled() == false );
+	CHECK( sql_observability_get_subsystem() == SqlObservabilitySubsystem::Unknown );
+
+	// Recording while disabled must not crash or allocate.
+	sql_observability_record_query( 100, true );
+	sql_observability_record_prepared( 100, false );
+	sql_observability_record_connect( true );
+	sql_observability_record_ping( false );
+	sql_observability_record_reconnect();
+
+	SqlObservabilitySnapshot snapshot = sql_observability_test_snapshot();
+	CHECK( snapshot.queries.aggregate.attempts_total == 0 );
+	CHECK( snapshot.prepared.aggregate.attempts_total == 0 );
+	CHECK( snapshot.connections.connect_attempts_total == 0 );
+}
+
+void test_runtime_enabled_init(){
+	sql_observability_test_reset( true, 50, 16 );
+	CHECK( sql_observability_enabled() == true );
+
+	sql_observability_record_query( 30, true );
+
+	SqlObservabilitySnapshot snapshot = sql_observability_test_snapshot();
+	CHECK( snapshot.queries.aggregate.attempts_total == 1 );
+	CHECK( snapshot.queries.aggregate.failures_total == 0 );
+	CHECK( snapshot.queries.aggregate.slow_total == 0 );
+}
+
+void test_runtime_idempotent_init_final(){
+	sql_observability_test_reset( true, 50, 16 );
+	CHECK( sql_observability_enabled() == true );
+
+	sql_observability_final();
+	CHECK( sql_observability_enabled() == false );
+
+	// A second final must be safe.
+	sql_observability_final();
+	CHECK( sql_observability_enabled() == false );
+}
+
+void test_runtime_default_subsystem(){
+	sql_observability_test_reset( true, 50, 16 );
+	CHECK( sql_observability_get_subsystem() == SqlObservabilitySubsystem::Unknown );
+
+	sql_observability_record_query( 10, true );
+
+	SqlObservabilitySnapshot snapshot = sql_observability_test_snapshot();
+	const SqlObservabilityCounters& unknown = snapshot.queries.by_subsystem[static_cast<size_t>( SqlObservabilitySubsystem::Unknown )];
+	CHECK( unknown.attempts_total == 1 );
+}
+
+void test_runtime_subsystem_selection(){
+	sql_observability_test_reset( true, 50, 16 );
+
+	sql_observability_set_subsystem( SqlObservabilitySubsystem::Map );
+	CHECK( sql_observability_get_subsystem() == SqlObservabilitySubsystem::Map );
+
+	sql_observability_record_query( 10, true );
+
+	SqlObservabilitySnapshot snapshot = sql_observability_test_snapshot();
+	const SqlObservabilityCounters& map = snapshot.queries.by_subsystem[static_cast<size_t>( SqlObservabilitySubsystem::Map )];
+	CHECK( map.attempts_total == 1 );
+	CHECK( snapshot.queries.aggregate.attempts_total == 1 );
+}
+
+void test_runtime_query_and_prepared(){
+	sql_observability_test_reset( true, 50, 16 );
+	sql_observability_set_subsystem( SqlObservabilitySubsystem::Char );
+
+	sql_observability_record_query( 30, true );
+	sql_observability_record_query( 70, false );
+	sql_observability_record_prepared( 20, true );
+	sql_observability_record_prepared( 80, false );
+
+	SqlObservabilitySnapshot snapshot = sql_observability_test_snapshot();
+
+	// Query aggregate: 2 attempts, 1 failure, 1 slow (70 >= 50).
+	CHECK( snapshot.queries.aggregate.attempts_total == 2 );
+	CHECK( snapshot.queries.aggregate.failures_total == 1 );
+	CHECK( snapshot.queries.aggregate.slow_total == 1 );
+	CHECK( snapshot.queries.aggregate.duration_last_ms == 70 );
+	CHECK( snapshot.queries.aggregate.duration_max_ms == 70 );
+
+	// Prepared aggregate: 2 attempts, 1 failure, 1 slow (80 >= 50).
+	CHECK( snapshot.prepared.aggregate.attempts_total == 2 );
+	CHECK( snapshot.prepared.aggregate.failures_total == 1 );
+	CHECK( snapshot.prepared.aggregate.slow_total == 1 );
+	CHECK( snapshot.prepared.aggregate.duration_last_ms == 80 );
+	CHECK( snapshot.prepared.aggregate.duration_max_ms == 80 );
+
+	const SqlObservabilityCounters& chr = snapshot.queries.by_subsystem[static_cast<size_t>( SqlObservabilitySubsystem::Char )];
+	CHECK( chr.attempts_total == 2 );
+	CHECK( chr.failures_total == 1 );
+
+	const SqlObservabilityCounters& chr_prepared = snapshot.prepared.by_subsystem[static_cast<size_t>( SqlObservabilitySubsystem::Char )];
+	CHECK( chr_prepared.attempts_total == 2 );
+	CHECK( chr_prepared.failures_total == 1 );
+}
+
+void test_runtime_slow_threshold(){
+	sql_observability_test_reset( true, 100, 16 );
+	sql_observability_set_subsystem( SqlObservabilitySubsystem::Login );
+
+	sql_observability_record_query( 99, true );
+	sql_observability_record_query( 100, true );
+	sql_observability_record_query( 101, true );
+
+	SqlObservabilitySnapshot snapshot = sql_observability_test_snapshot();
+	CHECK( snapshot.queries.aggregate.slow_total == 2 );
+}
+
+void test_runtime_connection_events(){
+	sql_observability_test_reset( true, 50, 16 );
+
+	sql_observability_record_connect( true );
+	sql_observability_record_connect( false );
+	sql_observability_record_ping( true );
+	sql_observability_record_ping( false );
+	sql_observability_record_reconnect();
+	sql_observability_record_reconnect();
+
+	SqlObservabilitySnapshot snapshot = sql_observability_test_snapshot();
+	CHECK( snapshot.connections.connect_attempts_total == 2 );
+	CHECK( snapshot.connections.connect_failures_total == 1 );
+	CHECK( snapshot.connections.ping_total == 2 );
+	CHECK( snapshot.connections.ping_failures_total == 1 );
+	CHECK( snapshot.connections.reconnect_events_total == 2 );
+}
+
+void test_runtime_render(){
+	sql_observability_test_reset( true, 50, 16 );
+	sql_observability_set_subsystem( SqlObservabilitySubsystem::Map );
+
+	sql_observability_record_query( 10, true );
+	sql_observability_record_connect( true );
+
+	const std::string out = sql_observability_render_prometheus();
+
+	CHECK( out.find( "rathena_sql_queries_total 1\n" ) != std::string::npos );
+	CHECK( out.find( "rathena_sql_connect_attempts_total 1\n" ) != std::string::npos );
+	CHECK( out.find( "{subsystem=\"map\"}" ) != std::string::npos );
+	CHECK( out.back() == '\n' );
+	CHECK( out.find( "\n\n" ) == std::string::npos );
+}
+
+void test_runtime_warning_count(){
+	g_show_warning_count = 0;
+
+	// Force malformed values through the test seam. The runtime init path reads
+	// environment variables, but the seam sets state directly. We exercise the
+	// parsing helpers with malformed values instead and verify the warning
+	// detector agrees they are invalid.
+	CHECK( is_valid_bool_setting( "maybe" ) == false );
+	CHECK( is_valid_bool_setting( "2" ) == false );
+	CHECK( is_valid_u32_setting( "abc" ) == false );
+	CHECK( is_valid_u32_setting( "4294967296" ) == false );
+
+	CHECK( is_valid_bool_setting( "true" ) == true );
+	CHECK( is_valid_bool_setting( "0" ) == true );
+	CHECK( is_valid_u32_setting( "50" ) == true );
+	CHECK( is_valid_u32_setting( "70000" ) == true );
+	CHECK( is_valid_u32_setting( "" ) == true );
+}
+
+#endif // RATHENA_SQL_OBSERVABILITY_TESTING
+
 } // namespace
 
 int main(){
@@ -217,6 +418,19 @@ int main(){
 	test_deterministic_ordering();
 	test_render_prometheus_privacy();
 	test_empty_snapshot_render();
+
+#ifdef RATHENA_SQL_OBSERVABILITY_TESTING
+	test_runtime_disabled_init();
+	test_runtime_enabled_init();
+	test_runtime_idempotent_init_final();
+	test_runtime_default_subsystem();
+	test_runtime_subsystem_selection();
+	test_runtime_query_and_prepared();
+	test_runtime_slow_threshold();
+	test_runtime_connection_events();
+	test_runtime_render();
+	test_runtime_warning_count();
+#endif
 
 	if( g_failures != 0 ){
 		std::fprintf( stderr, "%d check(s) failed\n", g_failures );

@@ -165,9 +165,11 @@ message( STATUS "Creating target common" )
 set( COMMON_HEADERS
 	${COMMON_ALL_HEADERS}
 	"${CMAKE_CURRENT_SOURCE_DIR}/sql.hpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/sql_observability.hpp"
 	CACHE INTERNAL "common headers" )
 set( COMMON_SOURCES
 	"${CMAKE_CURRENT_SOURCE_DIR}/sql.cpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/sql_observability.cpp"
 	CACHE INTERNAL "common sources" )
 set( DEPENDENCIES common_base yaml-cpp ryml )
 set( LIBRARIES ${GLOBAL_LIBRARIES} ${MYSQL_LIBRARIES} )
