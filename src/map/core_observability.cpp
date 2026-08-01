@@ -13,6 +13,8 @@
 #include "map.hpp"
 #include "packet_observability.hpp"
 
+#include <common/sql_observability.hpp>
+
 // Included last on purpose: on Windows the rAthena common headers define
 // their own <Windows.h> settings (common/winapi.hpp), this header must not
 // include <windows.h> before them.
@@ -149,6 +151,10 @@ bool write_snapshot( t_tick tick ){
 		output += packet_observability_render_snapshot();
 	}
 
+	if( sql_observability_enabled() ){
+		output += sql_observability_render_prometheus();
+	}
+
 	std::string error;
 	bool written = core_observability::ensure_parent_directory( state.output_path, &error );
 
@@ -176,7 +182,12 @@ bool write_snapshot( t_tick tick ){
 void core_observability_init(){
 	using namespace core_observability_internal;
 
-	// Initialize packet observability first so its configuration is parsed
+	// Initialize SQL observability first so its configuration is parsed
+	// regardless of whether core observability itself is enabled. SQL
+	// counters can accumulate even when the core timer/writer is disabled.
+	sql_observability_init();
+
+	// Initialize packet observability so its configuration is parsed
 	// regardless of whether core observability itself is enabled. Packet
 	// counters can accumulate even when the core timer/writer is disabled.
 	packet_observability_init();
@@ -237,4 +248,8 @@ void core_observability_final(){
 
 	// Tear down packet observability after the core timer has been cleaned up.
 	packet_observability_final();
+
+	// Tear down SQL observability last so any final snapshot can still read
+	// accumulated counters.
+	sql_observability_final();
 }
