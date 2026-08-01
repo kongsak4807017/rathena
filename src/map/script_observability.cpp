@@ -7,6 +7,7 @@
 #include <cstdlib>
 
 #include <common/showmsg.hpp>
+#include <common/timer.hpp>
 
 namespace script_observability_internal {
 
@@ -19,7 +20,13 @@ namespace {
 constexpr const char* ENV_ENABLE = "RATHENA_SCRIPT_OBSERVABILITY";
 constexpr const char* ENV_SLOW_MS = "RATHENA_SCRIPT_OBSERVABILITY_SLOW_MS";
 
+uint64_t script_observability_default_clock(){
+	return static_cast<uint64_t>( gettick_nocache() );
+}
+
 } // namespace
+
+uint64_t (*script_observability_clock_fn)() = script_observability_default_clock;
 
 bool script_observability_enabled(){
 	return script_observability_internal::state.enabled;
@@ -57,6 +64,7 @@ void script_observability_final(){
 	state.enabled = false;
 	state.slow_ms = script_observability_default_slow_ms;
 	state.snapshot = ScriptObservabilitySnapshot();
+	script_observability_clock_fn = script_observability_default_clock;
 }
 
 void script_observability_record_slice( ScriptObservabilityCategory category, uint64_t duration_ms, uint64_t commands, bool failed ){
@@ -69,7 +77,7 @@ void script_observability_record_slice( ScriptObservabilityCategory category, ui
 }
 
 std::string script_observability_render_prometheus(){
-	return script_observability_render_prometheus( script_observability_internal::state.snapshot );
+	return ::script_observability_render_prometheus( script_observability_internal::state.snapshot );
 }
 
 #ifdef RATHENA_SCRIPT_OBSERVABILITY_TESTING
@@ -80,10 +88,15 @@ void script_observability_test_reset( bool enabled, uint32_t slow_ms ){
 	state = script_observability_internal::script_observability_state();
 	state.enabled = enabled;
 	state.slow_ms = slow_ms;
+	script_observability_clock_fn = script_observability_default_clock;
 }
 
 ScriptObservabilitySnapshot script_observability_test_snapshot(){
 	return script_observability_internal::state.snapshot;
+}
+
+void script_observability_test_set_clock( uint64_t (*clock_fn)() ){
+	script_observability_clock_fn = clock_fn != nullptr ? clock_fn : script_observability_default_clock;
 }
 
 #endif // RATHENA_SCRIPT_OBSERVABILITY_TESTING

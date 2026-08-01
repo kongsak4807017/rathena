@@ -8,6 +8,7 @@
 //#define DEBUG_DUMP_STACK
 
 #include "script.hpp"
+#include "script_observability.hpp"
 
 #include <cerrno>
 #include <cmath>
@@ -4380,6 +4381,10 @@ void run_script_main(struct script_state *st)
 	int32 gotocount = script_config.check_gotocount;
 	TBL_PC *sd;
 	struct script_stack *stack = st->stack;
+	const bool observe = script_observability_enabled();
+	const uint64_t started_ms = observe ? script_observability_clock_fn() : 0;
+	uint64_t observed_commands = 0;
+	bool observed_failure = false;
 
 	script_attach_state(st);
 
@@ -4422,6 +4427,7 @@ void run_script_main(struct script_state *st)
 					ShowError("script:run_script_main: infinity loop !\n");
 					script_reportsrc(st);
 					st->state=END;
+					observed_failure = true;
 				}
 			}
 			break;
@@ -4468,13 +4474,22 @@ void run_script_main(struct script_state *st)
 		default:
 			ShowError("script:run_script_main:unknown command : %d @ %d\n",c,st->pos);
 			st->state=END;
+			observed_failure = true;
 			break;
 		}
+		observed_commands++;
 		if( !st->freeloop && cmdcount>0 && (--cmdcount)<=0 ){
 			ShowError("script:run_script_main: infinity loop !\n");
 			script_reportsrc(st);
 			st->state=END;
+			observed_failure = true;
 		}
+	}
+
+	if( observe ){
+		const uint64_t ended_ms = script_observability_clock_fn();
+		const uint64_t duration_ms = ended_ms > started_ms ? ended_ms - started_ms : 0;
+		script_observability_record_slice( st->observability_category, duration_ms, observed_commands, observed_failure );
 	}
 
 	if(st->sleep.tick > 0) {

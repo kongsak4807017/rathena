@@ -38,6 +38,12 @@ static void script_observability_test_ShowInfo( const char* fmt, ... ){
 #define ShowInfo script_observability_test_ShowInfo
 #define SHOWMSG_HPP
 
+#include <common/timer.hpp>
+
+// Stub for the monotonic clock so script_observability.cpp can be linked standalone.
+static t_tick test_gettick_nocache_value = 0;
+t_tick gettick_nocache(){ return test_gettick_nocache_value; }
+
 #include "script_observability.hpp"
 #include "script_observability_internal.hpp"
 #include "script_observability.cpp"
@@ -288,6 +294,37 @@ void test_runtime_disabled_rendering_empty(){
 	CHECK( out.find( "rathena_script_execution_slices_total 0" ) != std::string::npos );
 }
 
+static uint64_t test_clock_value = 0;
+
+static uint64_t test_clock_fn(){
+	return test_clock_value;
+}
+
+void test_clock_seam_duration(){
+	script_observability_test_reset( true, 25 );
+	script_observability_test_set_clock( test_clock_fn );
+
+	test_clock_value = 100;
+	script_observability_record_slice( ScriptObservabilityCategory::Npc, script_observability_clock_fn() - 100, 5, false );
+
+	const ScriptObservabilitySnapshot snapshot = script_observability_test_snapshot();
+	CHECK( snapshot.aggregate.execution_slices_total == 1 );
+}
+
+void test_clock_seam_override(){
+	script_observability_test_reset( true, 25 );
+	script_observability_test_set_clock( test_clock_fn );
+
+	test_clock_value = 0;
+	script_observability_record_slice( ScriptObservabilityCategory::Item, 26, 3, false );
+	test_clock_value = 50;
+	script_observability_record_slice( ScriptObservabilityCategory::Item, 10, 2, false );
+
+	const ScriptObservabilitySnapshot snapshot = script_observability_test_snapshot();
+	CHECK( snapshot.aggregate.execution_slices_total == 2 );
+	CHECK( snapshot.by_category[static_cast<size_t>( ScriptObservabilityCategory::Item )].execution_slices_total == 2 );
+}
+
 #endif // RATHENA_SCRIPT_OBSERVABILITY_TESTING
 
 } // namespace
@@ -311,6 +348,8 @@ int main(){
 	test_runtime_final_resets();
 	test_runtime_rendering();
 	test_runtime_disabled_rendering_empty();
+	test_clock_seam_duration();
+	test_clock_seam_override();
 #endif // RATHENA_SCRIPT_OBSERVABILITY_TESTING
 
 	if( g_failures > 0 ){

@@ -23,6 +23,7 @@ std::string script_observability_render_prometheus();
 #ifdef RATHENA_SCRIPT_OBSERVABILITY_TESTING
 void script_observability_test_reset( bool enabled, uint32_t slow_ms );
 ScriptObservabilitySnapshot script_observability_test_snapshot();
+void script_observability_test_set_clock( uint64_t (*clock_fn)() );
 #endif // RATHENA_SCRIPT_OBSERVABILITY_TESTING
 
 #endif // SCRIPT_OBSERVABILITY_HPP

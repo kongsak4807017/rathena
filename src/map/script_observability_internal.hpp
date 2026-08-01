@@ -22,4 +22,7 @@ extern script_observability_state state;
 
 } // namespace script_observability_internal
 
+/// Monotonic clock source used by run_script_main(). Defaults to gettick_nocache().
+extern uint64_t (*script_observability_clock_fn)();
+
 #endif // SCRIPT_OBSERVABILITY_INTERNAL_HPP
