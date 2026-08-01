@@ -787,24 +787,43 @@ int32 SqlStmt::BindParam(size_t idx, enum SqlDataType buffer_type, void* buffer,
 int32 SqlStmt::Execute(){
 	this->FreeResult();
 
+	int32 result = SQL_ERROR;
+	t_tick start = 0;
+	bool measure = sql_observability_enabled();
+	if( measure ){
+		start = gettick_nocache();
+	}
+
 	if( ( this->bind_params && mysql_stmt_bind_param( this->stmt, this->params ) ) ||
 		mysql_stmt_execute( this->stmt ) )
 	{
 		ShowSQL("DB error - %s\n", mysql_stmt_error(this->stmt));
 		ra_mysql_error_handler(mysql_stmt_errno(this->stmt));
-		return SQL_ERROR;
+		result = SQL_ERROR;
+	}
+	else
+	{
+		this->bind_columns = false;
+
+		// store all the data
+		if( mysql_stmt_store_result( this->stmt ) ){
+			ShowSQL( "DB error - %s\n", mysql_stmt_error( this->stmt ) );
+			ra_mysql_error_handler( mysql_stmt_errno( this->stmt ) );
+			result = SQL_ERROR;
+		}
+		else
+		{
+			result = SQL_SUCCESS;
+		}
 	}
 
-	this->bind_columns = false;
-
-	// store all the data
-	if( mysql_stmt_store_result( this->stmt ) ){
-		ShowSQL( "DB error - %s\n", mysql_stmt_error( this->stmt ) );
-		ra_mysql_error_handler( mysql_stmt_errno( this->stmt ) );
-		return SQL_ERROR;
+	if( measure ){
+		t_tick end = gettick_nocache();
+		uint64_t duration_ms = (end >= start) ? static_cast<uint64_t>(end - start) : 0;
+		sql_observability_record_prepared(duration_ms, result == SQL_SUCCESS);
 	}
 
-	return SQL_SUCCESS;
+	return result;
 }
 
 
