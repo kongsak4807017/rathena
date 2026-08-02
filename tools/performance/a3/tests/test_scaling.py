@@ -530,6 +530,83 @@ class CapacityTests(unittest.TestCase):
         )
         self.assertEqual(forward, backward)
 
+    def test_missing_500_all_pass_not_established(self):
+        result = self._derive([(1000, PASS), (2500, PASS), (5000, PASS)])
+        self.assertIsNone(result.safe_capacity)
+        self.assertIsNone(result.conditional_capacity)
+        self.assertEqual(result.tested_ceiling, 5000)
+        self.assertIs(result.verdict, CapacityVerdict.NOT_ESTABLISHED)
+        self.assertTrue(any("500" in note for note in result.notes))
+
+    def test_missing_500_warnings_not_established(self):
+        result = self._derive([(1000, WARNING), (2500, WARNING)])
+        self.assertIsNone(result.safe_capacity)
+        self.assertIsNone(result.conditional_capacity)
+        self.assertIs(result.verdict, CapacityVerdict.NOT_ESTABLISHED)
+
+    def test_missing_500_with_fail(self):
+        result = self._derive([(1000, PASS), (2500, FAIL)])
+        self.assertIs(result.verdict, CapacityVerdict.FAIL)
+        self.assertIsNone(result.safe_capacity)
+
+    def test_missing_500_with_blocked(self):
+        result = self._derive([(1000, BLOCKED), (2500, PASS)])
+        self.assertIs(result.verdict, CapacityVerdict.BLOCKED)
+        self.assertIsNone(result.safe_capacity)
+
+    def test_pass_at_500_followed_by_higher_pass_unchanged(self):
+        result = self._derive([(500, PASS), (1000, PASS)])
+        self.assertIs(result.verdict, CapacityVerdict.PASS)
+        self.assertEqual(result.safe_capacity, 1000)
+        self.assertIsNone(result.first_degradation_level)
+
+
+class InvalidRunIsolationTests(unittest.TestCase):
+    """Invalid runs must never affect valid-run identity or metric checks."""
+
+    def test_invalid_other_level_run_ignored(self):
+        runs = [make_run(1), make_run(2), make_run(3)]
+        runs.append(make_run(1, level=1000, valid=False, run_id="run-invalid"))
+        result = aggregate_level(runs)
+        self.assertIs(result.verdict, PASS)
+        self.assertEqual(result.load_level, 500)
+        self.assertEqual(result.valid_run_count, 3)
+
+    def test_invalid_run_manifest_ignored(self):
+        runs = [make_run(1), make_run(2), make_run(3)]
+        runs.append(
+            make_run(4, valid=False, run_id="run-invalid", manifest_id="a3-20260802-0000000-ubuntu2404-8c16t-32g-999")
+        )
+        result = aggregate_level(runs)
+        self.assertIs(result.verdict, PASS)
+        self.assertEqual(result.failures, ())
+
+    def test_invalid_run_duplicate_identity_ignored(self):
+        runs = [make_run(1), make_run(2), make_run(3)]
+        # Same run_id and run_number as a valid run, but invalid.
+        runs.append(make_run(1, valid=False))
+        result = aggregate_level(runs)
+        self.assertIs(result.verdict, PASS)
+        self.assertEqual(result.failures, ())
+
+    def test_invalid_run_malformed_metrics_ignored(self):
+        bad = base_metrics(500)
+        bad["error_rate"] = 1.5
+        bad["cpu_p95_percent"] = float("nan")
+        runs = [make_run(1), make_run(2), make_run(3)]
+        runs.append(make_run(4, valid=False, run_id="run-invalid", metrics=bad))
+        result = aggregate_level(runs)
+        self.assertIs(result.verdict, PASS)
+        self.assertEqual(result.failures, ())
+
+    def test_invalid_catastrophic_and_blocked_runs_ignored(self):
+        runs = [make_run(1), make_run(2), make_run(3)]
+        runs.append(make_run(4, valid=False, run_id="run-cat", catastrophic=True))
+        runs.append(make_run(5, valid=False, run_id="run-blocked", verdict=BLOCKED))
+        result = aggregate_level(runs)
+        self.assertIs(result.verdict, PASS)
+        self.assertEqual(result.failures, ())
+
 
 class ImmutabilityTests(unittest.TestCase):
     def test_run_summary_metrics_immutable(self):

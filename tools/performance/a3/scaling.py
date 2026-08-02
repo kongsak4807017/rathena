@@ -189,12 +189,13 @@ def aggregate_level(runs: Sequence[RunSummary]) -> LevelAggregation:
     failures: List[str] = []
     warnings: List[str] = []
 
-    levels = {run.load_level for run in runs}
-    if len(levels) > 1:
-        failures.append(f"load_level mismatch across runs: {sorted(levels)}")
-    load_level = runs[0].load_level if runs else 0
-
+    # Invalid runs never participate in identity or metric checks.
     valid_runs = [run for run in runs if run.valid]
+
+    levels = {run.load_level for run in valid_runs}
+    if len(levels) > 1:
+        failures.append(f"load_level mismatch across valid runs: {sorted(levels)}")
+    load_level = valid_runs[0].load_level if valid_runs else (runs[0].load_level if runs else 0)
 
     malformed: List[str] = []
     usable: List[RunSummary] = []
@@ -571,7 +572,11 @@ def derive_capacity(level_verdicts: Sequence[LevelAggregation]) -> CapacityResul
     ]
     safe_capacity = max(safe_candidates) if safe_candidates else None
 
-    conditional_candidates = [level for level in warnings if clean_below(level)]
+    conditional_candidates = [
+        level
+        for level in warnings
+        if BASELINE_LEVEL in verdict_of and clean_below(level)
+    ]
     conditional_capacity = max(conditional_candidates) if conditional_candidates else None
 
     degraded = sorted(warnings + failed + blocked)
@@ -590,6 +595,12 @@ def derive_capacity(level_verdicts: Sequence[LevelAggregation]) -> CapacityResul
     if blocked:
         notes.append(f"level {min(blocked)} blocked; capacity result not usable")
         verdict = CapacityVerdict.BLOCKED
+    elif BASELINE_LEVEL not in verdict_of:
+        # Without the 500-user baseline no safe or conditional capacity can
+        # be established; a higher PASS must not convert this to PASS.
+        verdict = (
+            CapacityVerdict.FAIL if failed else CapacityVerdict.NOT_ESTABLISHED
+        )
     elif not passes and not warnings:
         verdict = CapacityVerdict.FAIL if failed else CapacityVerdict.NOT_ESTABLISHED
     else:
