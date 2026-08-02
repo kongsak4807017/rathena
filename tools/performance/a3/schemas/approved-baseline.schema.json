@@ -1,107 +1,63 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rathena.local/tools/performance/a3/schemas/approved-baseline.schema.json",
-  "title": "A3 Approved Baseline Record",
-  "description": "Manual approval record for an A3 baseline cycle. CI must never create an APPROVED record automatically.",
+  "title": "A3 Approval Record",
+  "description": "Manual approval or rejection record for an A3 baseline cycle, exactly as emitted by tools.performance.a3.approval. approval_record_sha256 is the SHA-256 of the canonical JSON (UTF-8, sorted keys, separators (',', ':')) of this document excluding approval_record_sha256. CI must never create an APPROVED record automatically.",
   "type": "object",
   "required": [
+    "version",
+    "state",
     "baseline_cycle_id",
     "manifest_id",
-    "git_commit_sha",
-    "state",
-    "level_verdicts",
-    "capacity",
-    "record_sha256"
+    "git_sha",
+    "approved_utc",
+    "approver",
+    "rationale",
+    "capacity_verdict",
+    "safe_capacity",
+    "conditional_capacity",
+    "tested_ceiling",
+    "first_degradation_level",
+    "per_level_verdicts",
+    "warnings",
+    "report_checksums_sha256",
+    "approval_record_sha256"
   ],
   "properties": {
+    "version": {"type": "integer", "const": 1},
+    "state": {"type": "string", "enum": ["APPROVED", "REJECTED"]},
     "baseline_cycle_id": {"type": "string", "minLength": 1},
-    "manifest_id": {
+    "manifest_id": {"type": "string", "minLength": 1},
+    "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "approved_utc": {
       "type": "string",
-      "pattern": "^a3-\\d{8}-[0-9a-f]{7,40}-ubuntu2404-8c16t-32g-\\d+$"
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "RFC 3339 UTC decision timestamp supplied by the approver; also carries rejected_utc for REJECTED records."
     },
-    "git_commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "state": {
+    "approver": {"type": "string", "minLength": 1, "maxLength": 200},
+    "rationale": {"type": "string", "minLength": 10, "maxLength": 4000},
+    "capacity_verdict": {
       "type": "string",
-      "enum": [
-        "DRAFT",
-        "CI_EVALUATED",
-        "AWAITING_APPROVAL",
-        "APPROVED",
-        "REJECTED",
-        "SUPERSEDED"
-      ]
+      "enum": ["PASS", "PASS_WITH_WARNING", "FAIL", "BLOCKED", "NOT_ESTABLISHED"]
     },
-    "level_verdicts": {
+    "safe_capacity": {"type": ["integer", "null"], "enum": [500, 1000, 2500, 5000, null]},
+    "conditional_capacity": {"type": ["integer", "null"], "enum": [500, 1000, 2500, 5000, null]},
+    "tested_ceiling": {"type": ["integer", "null"], "enum": [500, 1000, 2500, 5000, null]},
+    "first_degradation_level": {"type": ["integer", "null"], "enum": [500, 1000, 2500, 5000, null]},
+    "per_level_verdicts": {
       "type": "object",
       "required": ["500", "1000", "2500", "5000"],
       "properties": {
-        "500": {"$ref": "#/$defs/levelVerdict"},
-        "1000": {"$ref": "#/$defs/levelVerdict"},
-        "2500": {"$ref": "#/$defs/levelVerdict"},
-        "5000": {"$ref": "#/$defs/levelVerdict"}
+        "500": {"type": "string", "enum": ["PASS", "PASS_WITH_WARNING", "FAIL", "BLOCKED"]},
+        "1000": {"type": "string", "enum": ["PASS", "PASS_WITH_WARNING", "FAIL", "BLOCKED"]},
+        "2500": {"type": "string", "enum": ["PASS", "PASS_WITH_WARNING", "FAIL", "BLOCKED"]},
+        "5000": {"type": "string", "enum": ["PASS", "PASS_WITH_WARNING", "FAIL", "BLOCKED"]}
       },
       "additionalProperties": false
     },
-    "capacity": {
-      "type": "object",
-      "required": ["safe_capacity", "conditional_capacity", "tested_ceiling"],
-      "properties": {
-        "safe_capacity": {
-          "anyOf": [
-            {"type": "integer", "enum": [500, 1000, 2500, 5000]},
-            {"type": "string", "const": "Not Established"}
-          ]
-        },
-        "conditional_capacity": {
-          "anyOf": [
-            {"type": "integer", "enum": [500, 1000, 2500, 5000]},
-            {"type": "string", "const": "Not Established"}
-          ]
-        },
-        "tested_ceiling": {
-          "anyOf": [
-            {"type": "integer", "enum": [500, 1000, 2500, 5000]},
-            {"type": "string", "const": "Not Established"}
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "approval": {
-      "type": ["object", "null"],
-      "required": ["approver", "approved_utc", "rationale", "known_warnings"],
-      "properties": {
-        "approver": {"type": "string", "minLength": 1},
-        "approved_utc": {"type": "string", "format": "date-time"},
-        "rationale": {"type": "string", "minLength": 1},
-        "known_warnings": {"type": "array", "items": {"type": "string"}}
-      },
-      "additionalProperties": false
-    },
-    "superseded_by": {
-      "type": ["string", "null"],
-      "description": "manifest_id of the superseding baseline, if any."
-    },
-    "record_sha256": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$",
-      "description": "SHA-256 of the canonical JSON of this record excluding record_sha256."
-    }
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "report_checksums_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "approval_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
   },
-  "additionalProperties": false,
-  "$defs": {
-    "levelVerdict": {
-      "type": "object",
-      "required": ["verdict", "valid_runs"],
-      "properties": {
-        "verdict": {
-          "type": "string",
-          "enum": ["PASS", "PASS_WITH_WARNING", "FAIL", "BLOCKED", "NOT_ESTABLISHED"]
-        },
-        "valid_runs": {"type": "integer", "minimum": 0, "maximum": 3},
-        "warnings": {"type": "array", "items": {"type": "string"}}
-      },
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }
