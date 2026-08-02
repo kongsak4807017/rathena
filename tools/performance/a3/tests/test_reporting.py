@@ -877,6 +877,114 @@ class SecurityAndDocsTests(ReportingTestBase):
         self.assertIn("production player data", text.lower())
 
 
+class MarkdownSecretProtectionTests(ReportingTestBase):
+    MARKERS = (
+        "password",
+        "token",
+        "secret",
+        "api_key",
+        "private_key",
+        "authorization",
+        "bearer",
+    )
+
+    def _inputs_with(self, mutate):
+        levels, scaling, regression, capacity, controls, dataset, recs = cycle_inputs()
+        mutate(controls, recs)
+        return levels, scaling, regression, capacity, controls, dataset, recs
+
+    def _assert_rejected_closed(self, inputs, sentinel=None):
+        with self.assertRaises((ValueError, ArtifactError)) as ctx:
+            self.write_cycle(inputs=inputs)
+        if sentinel is not None:
+            self.assertNotIn(sentinel, str(ctx.exception))
+        self.assertFalse((self.cycle_dir() / "checksums.json").exists())
+        if self.cycle_dir().exists():
+            self.assertEqual(list(self.cycle_dir().rglob("*.tmp")), [])
+
+    def test_technical_report_rejects_every_marker_via_bottleneck(self):
+        for marker in self.MARKERS:
+            with self.subTest(marker=marker):
+                inputs = self._inputs_with(
+                    lambda controls, recs, m=marker: controls.update(
+                        primary_bottleneck=f"leak {m} here"
+                    )
+                )
+                original = self.artifact_root
+                self.artifact_root = Path(self._tmp.name) / f"root-{marker}"
+                self.artifact_root.mkdir()
+                try:
+                    self._assert_rejected_closed(inputs)
+                finally:
+                    self.artifact_root = original
+
+    def test_executive_summary_rejects_remediation_marker(self):
+        inputs = self._inputs_with(
+            lambda controls, recs: recs.update(
+                remediation=["rotate the db_password immediately"]
+            )
+        )
+        self._assert_rejected_closed(inputs)
+        # Technical report does not contain remediation; it may exist.
+        self.assertFalse((self.cycle_dir() / "executive-summary.md").exists())
+
+    def test_controls_notes_marker_rejected(self):
+        inputs = self._inputs_with(
+            lambda controls, recs: controls["idle"].update(
+                notes="contains SECRET material"
+            )
+        )
+        self._assert_rejected_closed(inputs)
+
+    def test_a5_recommendation_marker_rejected(self):
+        inputs = self._inputs_with(
+            lambda controls, recs: recs.update(a5=["rotate the API_KEY"])
+        )
+        self._assert_rejected_closed(inputs)
+
+    def test_manifest_field_marker_rejected(self):
+        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        manifest["source"]["branch"] = "feat/token-leak"
+        with self.assertRaises((ValueError, ArtifactError)):
+            self.write_cycle(manifest=manifest)
+        self.assertFalse((self.cycle_dir() / "checksums.json").exists())
+
+    def test_mixed_case_markers_rejected(self):
+        for marker in ("PaSsWoRd", "TOKEN", "Bearer", "AuThOrIzAtIoN"):
+            with self.subTest(marker=marker):
+                inputs = self._inputs_with(
+                    lambda controls, recs, m=marker: controls.update(
+                        primary_bottleneck=f"{m} detected"
+                    )
+                )
+                root = Path(self._tmp.name) / f"root-mc-{marker}"
+                root.mkdir()
+                original = self.artifact_root
+                self.artifact_root = root
+                self._assert_rejected_closed(inputs)
+                self.artifact_root = original
+
+    def test_exception_text_excludes_secret_value(self):
+        sentinel = "hunter2s3ntinel"
+        inputs = self._inputs_with(
+            lambda controls, recs: controls.update(
+                primary_bottleneck=f"password={sentinel}"
+            )
+        )
+        self._assert_rejected_closed(inputs, sentinel=sentinel)
+
+    def test_raw_logs_with_marker_still_copied_byte_for_byte(self):
+        sources = build_source_files(self.source_dir())
+        marker_log = sources["service-logs/map-server.log"]
+        marker_log.write_text(
+            "player reported password issue\n", encoding="utf-8", newline="\n"
+        )
+        result = self.write_run(source_files=sources)
+        self.assertTrue(result.complete)
+        copied = self.run_dir() / "service-logs" / "map-server.log"
+        self.assertEqual(copied.read_bytes(), marker_log.read_bytes())
+
+
 class DeterminismTests(ReportingTestBase):
     def test_cycle_artifacts_byte_identical(self):
         self.write_cycle()

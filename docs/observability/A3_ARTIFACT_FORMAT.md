@@ -130,7 +130,9 @@ artifacts/performance/a3/<baseline_cycle_id>/
 ## Data safety
 
 - No production player data appears in any artifact. Datasets are synthetic
-  only. Structured artifacts are rejected if they contain secret markers
-  (password, token, secret, api_key, private_key, authorization, bearer);
-  raw copied service logs are excluded from scanning to preserve byte
-  integrity, and reports or indexes never embed raw log content.
+  only. Structured artifacts — including generated Markdown reports
+  (technical-report.md and executive-summary.md) — are rejected if they
+  contain secret markers (password, token, secret, api_key, private_key,
+  authorization, bearer); rejection is fail-closed and never redacts
+  content. Raw copied service logs are excluded from scanning to preserve
+  byte integrity, and reports or indexes never embed raw log content.

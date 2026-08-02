@@ -275,6 +275,14 @@ def _write_json(path: Path, payload: Any, context: str) -> None:
     _atomic_write_bytes(path, (text + "\n").encode("utf-8"))
 
 
+def _write_markdown(path: Path, text: str, context: str) -> None:
+    """Write a Markdown report with structured-artifact secret protection."""
+    if not isinstance(text, str):
+        raise ArtifactError(f"{context} must be a string")
+    _assert_no_secret_markers(text, context)
+    _atomic_write_bytes(path, text.encode("utf-8"))
+
+
 def _stream_copy(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=destination.name + ".", suffix=".tmp", dir=destination.parent)
@@ -870,10 +878,10 @@ def write_cycle_reports(
         regression_result, capacity_result, controls, dataset_summary,
         anomalies, recommendations, readiness,
     )
-    _atomic_write_bytes(cycle_dir / "technical-report.md", technical.encode("utf-8"))
+    _write_markdown(cycle_dir / "technical-report.md", technical, "technical-report.md")
 
     executive = _render_executive_summary(capacity_result, controls, recommendations, readiness)
-    _atomic_write_bytes(cycle_dir / "executive-summary.md", executive.encode("utf-8"))
+    _write_markdown(cycle_dir / "executive-summary.md", executive, "executive-summary.md")
 
     _atomic_write_bytes(
         cycle_dir / "comparison.csv",
