@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rathena.local/tools/performance/a3/schemas/slo-verdict.schema.json",
+  "title": "A3 SLO Verdict",
+  "description": "Per-metric and per-run SLO verdicts for one run, evaluated from steady-state samples against slo-thresholds.json.",
+  "type": "object",
+  "required": [
+    "baseline_cycle_id",
+    "manifest_id",
+    "run_id",
+    "target_concurrency",
+    "evaluated_utc",
+    "metric_verdicts",
+    "run_verdict"
+  ],
+  "properties": {
+    "baseline_cycle_id": {"type": "string", "minLength": 1},
+    "manifest_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "target_concurrency": {"type": "integer", "enum": [500, 1000, 2500, 5000]},
+    "evaluated_utc": {"type": "string", "format": "date-time"},
+    "metric_verdicts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["metric", "verdict", "observed", "threshold", "reasons"],
+        "properties": {
+          "metric": {"type": "string", "minLength": 1},
+          "verdict": {
+            "type": "string",
+            "enum": ["PASS", "PASS_WITH_WARNING", "FAIL", "BLOCKED"]
+          },
+          "observed": {"type": ["number", "integer", "string"]},
+          "threshold": {"type": ["number", "integer", "string"]},
+          "warning_zone": {"type": "boolean"},
+          "reasons": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "run_verdict": {
+      "type": "string",
+      "enum": ["PASS", "PASS_WITH_WARNING", "FAIL", "BLOCKED"]
+    }
+  },
+  "additionalProperties": false
+}

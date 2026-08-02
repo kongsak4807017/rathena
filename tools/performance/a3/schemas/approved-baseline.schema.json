@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rathena.local/tools/performance/a3/schemas/approved-baseline.schema.json",
+  "title": "A3 Approved Baseline Record",
+  "description": "Manual approval record for an A3 baseline cycle. CI must never create an APPROVED record automatically.",
+  "type": "object",
+  "required": [
+    "baseline_cycle_id",
+    "manifest_id",
+    "git_commit_sha",
+    "state",
+    "level_verdicts",
+    "capacity",
+    "record_sha256"
+  ],
+  "properties": {
+    "baseline_cycle_id": {"type": "string", "minLength": 1},
+    "manifest_id": {
+      "type": "string",
+      "pattern": "^a3-\\d{8}-[0-9a-f]{7,40}-ubuntu2404-8c16t-32g-\\d+$"
+    },
+    "git_commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "state": {
+      "type": "string",
+      "enum": [
+        "DRAFT",
+        "CI_EVALUATED",
+        "AWAITING_APPROVAL",
+        "APPROVED",
+        "REJECTED",
+        "SUPERSEDED"
+      ]
+    },
+    "level_verdicts": {
+      "type": "object",
+      "required": ["500", "1000", "2500", "5000"],
+      "properties": {
+        "500": {"$ref": "#/$defs/levelVerdict"},
+        "1000": {"$ref": "#/$defs/levelVerdict"},
+        "2500": {"$ref": "#/$defs/levelVerdict"},
+        "5000": {"$ref": "#/$defs/levelVerdict"}
+      },
+      "additionalProperties": false
+    },
+    "capacity": {
+      "type": "object",
+      "required": ["safe_capacity", "conditional_capacity", "tested_ceiling"],
+      "properties": {
+        "safe_capacity": {
+          "anyOf": [
+            {"type": "integer", "enum": [500, 1000, 2500, 5000]},
+            {"type": "string", "const": "Not Established"}
+          ]
+        },
+        "conditional_capacity": {
+          "anyOf": [
+            {"type": "integer", "enum": [500, 1000, 2500, 5000]},
+            {"type": "string", "const": "Not Established"}
+          ]
+        },
+        "tested_ceiling": {
+          "anyOf": [
+            {"type": "integer", "enum": [500, 1000, 2500, 5000]},
+            {"type": "string", "const": "Not Established"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "approval": {
+      "type": ["object", "null"],
+      "required": ["approver", "approved_utc", "rationale", "known_warnings"],
+      "properties": {
+        "approver": {"type": "string", "minLength": 1},
+        "approved_utc": {"type": "string", "format": "date-time"},
+        "rationale": {"type": "string", "minLength": 1},
+        "known_warnings": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "superseded_by": {
+      "type": ["string", "null"],
+      "description": "manifest_id of the superseding baseline, if any."
+    },
+    "record_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the canonical JSON of this record excluding record_sha256."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "levelVerdict": {
+      "type": "object",
+      "required": ["verdict", "valid_runs"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["PASS", "PASS_WITH_WARNING", "FAIL", "BLOCKED", "NOT_ESTABLISHED"]
+        },
+        "valid_runs": {"type": "integer", "minimum": 0, "maximum": 3},
+        "warnings": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
+  }
+}

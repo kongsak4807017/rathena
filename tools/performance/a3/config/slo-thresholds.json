@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "warning_zone_ratio": 0.9,
+  "cpu": {
+    "median_max_percent": 75,
+    "p95_max_percent": 85,
+    "sustained_above_percent": 95,
+    "sustained_max_seconds": 30
+  },
+  "memory": {
+    "total_rss_max_percent_of_ram": 80,
+    "steady_state_growth_max_percent": 5,
+    "swap_in_max": 0,
+    "swap_out_max": 0,
+    "oom_max": 0,
+    "allocation_failure_max": 0
+  },
+  "tick_latency_ms": {
+    "p50_max": 10,
+    "p95_max": 25,
+    "p99_max": 50,
+    "max_max": 100,
+    "sustained_above_ms": 50,
+    "sustained_max_seconds": 10
+  },
+  "packet_processing_ms": {
+    "p95_max": 5,
+    "p99_max": 10,
+    "max_max": 25,
+    "backlog_growth_max_seconds": 10,
+    "dropped_or_rejected_max_ratio": 0.0001
+  },
+  "sql_ms": {
+    "p95_max": 25,
+    "p99_max": 75,
+    "max_max": 500,
+    "slow_query_max_ratio": 0.005,
+    "execution_failure_max_ratio": 0.0001,
+    "connection_acquisition_failure_max": 0,
+    "deadlock_max": 0,
+    "lock_wait_timeout_max": 0,
+    "connection_usage_p95_max_ratio_of_configured_max": 0.75
+  },
+  "script_ms": {
+    "p95_max": 5,
+    "p99_max": 20,
+    "max_max": 100,
+    "slow_script_max_ratio": 0.005,
+    "execution_failure_max_ratio": 0.0001,
+    "category_latency_max_multiple_of_500_user_baseline": 2,
+    "unknown_category_max_ratio": 0.05
+  },
+  "errors": {
+    "process_crash_max": 0,
+    "data_corruption_max": 0,
+    "deadlock_max": 0,
+    "login_failure_max_ratio": 0.001,
+    "character_selection_failure_max_ratio": 0.001,
+    "unexpected_steady_state_disconnect_max_ratio": 0.005,
+    "sql_execution_failure_max_ratio": 0.0001,
+    "script_execution_failure_max_ratio": 0.0001
+  },
+  "storage": {
+    "utilization_p95_max_percent": 75,
+    "await_p95_max_ms": 5,
+    "await_p99_max_ms": 10,
+    "queue_depth_growth_max_seconds": 10
+  },
+  "network": {
+    "utilization_p95_max_percent_of_1gbps": 70,
+    "packet_loss_max_ratio": 0.001,
+    "tcp_retransmission_max_ratio": 0.001,
+    "socket_error_max": 0,
+    "listen_drop_max": 0
+  },
+  "scaling_guardrails": {
+    "p95_growth_max_ratio_per_level": 1.5,
+    "p99_growth_max_ratio_per_level": 1.75,
+    "memory_per_user_growth_max_ratio_from_500_user_baseline": 1.2,
+    "error_rate_growth_max_ratio_per_level": 2.0,
+    "throughput_growth_min_ratio_of_proportional_user_increase": 0.8
+  },
+  "run_validity": {
+    "target_concurrency_floor_ratio": 0.98,
+    "unexpected_disconnect_max_ratio": 0.01,
+    "prometheus_missing_data_limit_seconds": 15,
+    "unrelated_cpu_max_percent": 5,
+    "packet_loss_max_ratio": 0.001,
+    "workload_mix_tolerance_percentage_points": 5
+  }
+}

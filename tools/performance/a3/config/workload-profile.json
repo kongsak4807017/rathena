@@ -1,0 +1,15 @@
+{
+  "profile_id": "a3-mixed-gameplay-v1",
+  "description": "Steady-state mixed gameplay workload proportions for the A3 baseline. Aggregate mix must stay within +/-5 percentage points of each target proportion.",
+  "tolerance_percentage_points": 5,
+  "proportions": {
+    "movement_direction_changes": 0.35,
+    "idle_heartbeat": 0.2,
+    "combat": 0.15,
+    "npc_interaction": 0.1,
+    "item_inventory": 0.08,
+    "map_change_warp": 0.05,
+    "chat": 0.04,
+    "login_logout_character_select": 0.03
+  }
+}

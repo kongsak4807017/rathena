@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rathena.local/tools/performance/a3/schemas/manifest.schema.json",
+  "title": "A3 Reproducibility Manifest",
+  "description": "Frozen environment identity for one A3 baseline cycle. The manifest_sha256 is computed over the canonical JSON serialization (sorted keys, UTF-8, separators (',', ':')) of this document with the manifest_sha256 field excluded.",
+  "type": "object",
+  "required": [
+    "manifest_id",
+    "manifest_sha256",
+    "created_utc",
+    "source",
+    "build",
+    "protocol",
+    "rathena_config",
+    "game_content",
+    "database",
+    "operating_system",
+    "hardware",
+    "observability",
+    "load_generation",
+    "dataset",
+    "capture_errors"
+  ],
+  "properties": {
+    "manifest_id": {
+      "type": "string",
+      "pattern": "^a3-\\d{8}-[0-9a-f]{7,40}-ubuntu2404-8c16t-32g-\\d+$"
+    },
+    "manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "created_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "object",
+      "required": ["repository_url", "ref", "commit_sha", "working_tree_clean", "dependency_revisions"],
+      "properties": {
+        "repository_url": {"type": "string"},
+        "ref": {"type": "string"},
+        "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "working_tree_clean": {"type": "boolean"},
+        "dependency_revisions": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "build": {
+      "type": "object",
+      "required": ["compiler", "build_system_version", "release_flags", "linked_libraries", "login_server_sha256", "char_server_sha256", "map_server_sha256"],
+      "properties": {
+        "compiler": {"type": "string"},
+        "build_system_version": {"type": "string"},
+        "release_flags": {"type": "string"},
+        "linked_libraries": {"type": "array", "items": {"type": "string"}},
+        "login_server_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "char_server_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "map_server_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "protocol": {
+      "type": "object",
+      "required": ["packetver", "packet_db_revision"],
+      "properties": {
+        "packetver": {"type": "integer"},
+        "packet_db_revision": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "rathena_config": {
+      "type": "object",
+      "required": ["checksums"],
+      "properties": {
+        "checksums": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "game_content": {
+      "type": "object",
+      "required": ["scripts_sha256", "npc_sha256", "item_sha256", "monster_sha256", "skill_sha256", "map_sha256"],
+      "properties": {
+        "scripts_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "npc_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "item_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "monster_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "skill_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "map_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "database": {
+      "type": "object",
+      "required": ["mariadb_version", "my_cnf_sha256", "schema_revision", "schema_sha256"],
+      "properties": {
+        "mariadb_version": {"type": "string"},
+        "my_cnf_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "schema_revision": {"type": "string"},
+        "schema_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "operating_system": {
+      "type": "object",
+      "required": ["ubuntu_version", "kernel_version", "packages_sha256", "filesystem", "mount_options", "timezone", "time_sync_source"],
+      "properties": {
+        "ubuntu_version": {"type": "string"},
+        "kernel_version": {"type": "string"},
+        "packages_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "filesystem": {"type": "string"},
+        "mount_options": {"type": "string"},
+        "timezone": {"type": "string"},
+        "time_sync_source": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "hardware": {
+      "type": "object",
+      "required": ["cpu", "ram_gb", "storage", "nic", "bios", "firmware", "governor", "power_profile", "numa_topology"],
+      "properties": {
+        "cpu": {"type": "string"},
+        "ram_gb": {"type": "integer", "const": 32},
+        "storage": {"type": "string"},
+        "nic": {"type": "string"},
+        "bios": {"type": "string"},
+        "firmware": {"type": "string"},
+        "governor": {"type": "string"},
+        "power_profile": {"type": "string"},
+        "numa_topology": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "observability": {
+      "type": "object",
+      "required": ["config_sha256", "slow_sql_threshold_ms", "slow_script_threshold_ms", "snapshot_interval_ms", "prometheus", "exporters", "grafana_dashboards_sha256"],
+      "properties": {
+        "config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "slow_sql_threshold_ms": {"type": "number"},
+        "slow_script_threshold_ms": {"type": "number"},
+        "snapshot_interval_ms": {"type": "integer", "const": 5000},
+        "prometheus": {
+          "type": "object",
+          "required": ["version", "scrape_config_sha256", "scrape_interval_seconds"],
+          "properties": {
+            "version": {"type": "string"},
+            "scrape_config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "scrape_interval_seconds": {"type": "integer", "const": 5}
+          },
+          "additionalProperties": false
+        },
+        "exporters": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "grafana_dashboards_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "load_generation": {
+      "type": "object",
+      "required": ["harness_repository", "harness_commit", "harness_binary_sha256", "workload_sha256", "account_range", "random_seed", "webgl_revision"],
+      "properties": {
+        "harness_repository": {"type": "string"},
+        "harness_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "harness_binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "workload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "account_range": {"type": "string"},
+        "random_seed": {"type": "integer"},
+        "webgl_revision": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "dataset": {
+      "type": "object",
+      "required": ["seed", "checksum_sha256", "row_counts"],
+      "properties": {
+        "seed": {"type": "integer"},
+        "checksum_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "row_counts": {
+          "type": "object",
+          "required": ["accounts", "characters", "guilds", "parties"],
+          "properties": {
+            "accounts": {"type": "integer", "const": 6000},
+            "characters": {"type": "integer", "const": 12000},
+            "guilds": {"type": "integer", "const": 200},
+            "parties": {"type": "integer", "const": 500}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "capture_errors": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Non-empty capture_errors makes the manifest ineligible for execution."
+    }
+  },
+  "additionalProperties": false
+}
