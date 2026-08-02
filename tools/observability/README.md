@@ -22,6 +22,16 @@ curl http://127.0.0.1:9468/metrics
 
 The default listener is loopback-only. Put it behind an authenticated monitoring network or reverse proxy before exposing it outside the host.
 
+## Runtime slow thresholds
+
+`slow_sql_threshold_ms` and `slow_script_threshold_ms` pin the runtime
+instrumentation slow thresholds used by the A3 baseline. The service launcher
+mirrors them into `RATHENA_SQL_OBSERVABILITY_SLOW_MS` and
+`RATHENA_SCRIPT_OBSERVABILITY_SLOW_MS` when starting the servers, so this file
+is the single authoritative source for both values. The A3 reproducibility
+manifest freezes them as `rathena_configuration.slow_sql_threshold` and
+`rathena_configuration.slow_script_threshold`.
+
 ## MariaDB probe
 
 Enable the probe only after credentials are supplied securely through a MariaDB option file or environment-supported credential mechanism. Do not place database passwords in the JSON configuration or commit them to Git.

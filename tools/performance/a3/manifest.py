@@ -292,27 +292,58 @@ def _capture_protocol(root: Path, errors: List[Dict[str, Any]]) -> Dict[str, Any
     return {"packetver": packetver, "packet_database_revision": packet_db_revision}
 
 
-def _capture_rathena_configuration(
-    root: Path, config: A3Config, errors: List[Dict[str, Any]]
-) -> Dict[str, Any]:
-    thresholds_path = (
-        root / "tools" / "performance" / "a3" / "config" / "slo-thresholds.json"
-    )
-    slow_sql_threshold: Any = None
-    slow_script_threshold: Any = None
+# Runtime observability thresholds are pinned in the approved observability
+# configuration file and mirrored by the service launcher into
+# RATHENA_SQL_OBSERVABILITY_SLOW_MS / RATHENA_SCRIPT_OBSERVABILITY_SLOW_MS.
+# They must never be inferred from SLO thresholds or hard-coded here.
+OBSERVABILITY_CONFIG_REL = Path("tools") / "observability" / "observer.example.json"
+SLOW_SQL_THRESHOLD_KEY = "slow_sql_threshold_ms"
+SLOW_SCRIPT_THRESHOLD_KEY = "slow_script_threshold_ms"
+
+
+def _read_runtime_threshold(
+    root: Path, key: str, field: str, errors: List[Dict[str, Any]]
+) -> Optional[int]:
+    """Read one runtime slow threshold from the observability config.
+
+    Missing or malformed values append a structured capture error naming
+    ``field`` and yield ``None`` (which marks the manifest ineligible).
+    """
+    path = root / OBSERVABILITY_CONFIG_REL
     try:
-        thresholds = read_json(thresholds_path)
-        slow_sql_threshold = thresholds["sql_ms"]["p95_max"]
-        slow_script_threshold = thresholds["script_ms"]["p95_max"]
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raw = read_json(path)
+    except (OSError, ValueError) as exc:
+        errors.append(_error_entry(["read_json", str(path)], field, str(exc), None))
+        return None
+    value = raw.get(key) if isinstance(raw, dict) else None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         errors.append(
             _error_entry(
-                ["read_json", str(thresholds_path)],
-                "rathena_configuration.slow_sql_threshold",
-                str(exc),
+                ["read_json", str(path)],
+                field,
+                f"missing or invalid {key}: {value!r}",
                 None,
             )
         )
+        return None
+    return value
+
+
+def _capture_rathena_configuration(
+    root: Path, config: A3Config, errors: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    slow_sql_threshold = _read_runtime_threshold(
+        root,
+        SLOW_SQL_THRESHOLD_KEY,
+        "rathena_configuration.slow_sql_threshold",
+        errors,
+    )
+    slow_script_threshold = _read_runtime_threshold(
+        root,
+        SLOW_SCRIPT_THRESHOLD_KEY,
+        "rathena_configuration.slow_script_threshold",
+        errors,
+    )
 
     return {
         "login_config_sha256": _hash_file(
@@ -336,7 +367,7 @@ def _capture_rathena_configuration(
             errors,
         ),
         "observability_config_sha256": _hash_file(
-            root / "tools" / "observability" / "observer.example.json",
+            root / OBSERVABILITY_CONFIG_REL,
             "rathena_configuration.observability_config_sha256",
             errors,
         ),

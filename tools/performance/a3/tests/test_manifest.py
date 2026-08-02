@@ -20,6 +20,8 @@ from tools.performance.a3.manifest import (
 )
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "valid_manifest.json"
+SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "manifest.schema.json"
+REPO_ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE_CONFIG = (
     Path(__file__).resolve().parents[1] / "config" / "a3.example.json"
 )
@@ -332,10 +334,17 @@ def build_fake_repo(root: Path) -> None:
     _write(root / "conf" / "char_athena.conf", "// char\n")
     _write(root / "conf" / "map_athena.conf", "// map\n")
     _write(root / "conf" / "inter_athena.conf", "// inter\n")
-    _write(root / "tools" / "observability" / "observer.example.json", "{}\n")
+    _write(
+        root / "tools" / "observability" / "observer.example.json",
+        json.dumps(
+            {"slow_sql_threshold_ms": 50, "slow_script_threshold_ms": 25}
+        ),
+    )
+    # Decoy SLO thresholds: p95 values must never feed the captured slow
+    # thresholds, so these intentionally differ from the runtime values.
     _write(
         root / "tools" / "performance" / "a3" / "config" / "slo-thresholds.json",
-        json.dumps({"sql_ms": {"p95_max": 25}, "script_ms": {"p95_max": 5}}),
+        json.dumps({"sql_ms": {"p95_max": 999}, "script_ms": {"p95_max": 888}}),
     )
     _write(
         root / "tools" / "performance" / "a3" / "config" / "workload-profile.json",
@@ -463,7 +472,7 @@ def make_dispatcher(fail_command=None, timeout_command=None, calls=None):
     return fake_run
 
 
-class CaptureManifestTests(unittest.TestCase):
+class CaptureTestBase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
@@ -486,6 +495,8 @@ class CaptureManifestTests(unittest.TestCase):
             patcher.start()
         return capture_manifest(self.repo, self.config)
 
+
+class CaptureManifestTests(CaptureTestBase):
     def test_capture_produces_all_required_groups(self):
         manifest = self._capture(make_dispatcher())
         self.assertTrue(EXPECTED_GROUPS.issubset(set(manifest)))
@@ -511,10 +522,10 @@ class CaptureManifestTests(unittest.TestCase):
         self.assertEqual(manifest["build"]["compiler_version"], "13.2.0")
         self.assertEqual(manifest["build"]["build_type"], "Release")
         self.assertEqual(
-            manifest["rathena_configuration"]["slow_sql_threshold"], 25
+            manifest["rathena_configuration"]["slow_sql_threshold"], 50
         )
         self.assertEqual(
-            manifest["rathena_configuration"]["slow_script_threshold"], 5
+            manifest["rathena_configuration"]["slow_script_threshold"], 25
         )
         self.assertEqual(
             manifest["rathena_configuration"]["snapshot_interval_seconds"], 5
@@ -603,6 +614,270 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(redacted["nested"]["plain"], "ok")
         self.assertEqual(redacted["list"][0]["oauth_token"], "<redacted>")
         self.assertEqual(redacted["ordinary"], "value")
+
+
+class ThresholdProvenanceTests(CaptureTestBase):
+    """Slow thresholds must come from the runtime observability config.
+
+    Authoritative source: ``tools/observability/observer.example.json`` keys
+    ``slow_sql_threshold_ms`` and ``slow_script_threshold_ms``. These pin the
+    runtime instrumentation thresholds controlled at service launch by
+    ``RATHENA_SQL_OBSERVABILITY_SLOW_MS`` and
+    ``RATHENA_SCRIPT_OBSERVABILITY_SLOW_MS``. SLO thresholds
+    (``slo-thresholds.json``) must never feed these fields.
+    """
+
+    def _capture_with_observer(self, observer_config):
+        _write(
+            self.repo / "tools" / "observability" / "observer.example.json",
+            json.dumps(observer_config),
+        )
+        return self._capture(make_dispatcher())
+
+    def test_sql_slow_threshold_comes_from_runtime_observability_config(self):
+        manifest = self._capture_with_observer(
+            {"slow_sql_threshold_ms": 75, "slow_script_threshold_ms": 25}
+        )
+        self.assertEqual(
+            manifest["rathena_configuration"]["slow_sql_threshold"], 75
+        )
+
+    def test_script_slow_threshold_comes_from_runtime_observability_config(self):
+        manifest = self._capture_with_observer(
+            {"slow_sql_threshold_ms": 50, "slow_script_threshold_ms": 35}
+        )
+        self.assertEqual(
+            manifest["rathena_configuration"]["slow_script_threshold"], 35
+        )
+
+    def test_slo_p95_changes_do_not_affect_captured_slow_thresholds(self):
+        # The fake repository pins decoy SLO p95 values (999/888); captured
+        # slow thresholds must still come from the observer config (50/25).
+        manifest = self._capture(make_dispatcher())
+        self.assertEqual(
+            manifest["rathena_configuration"]["slow_sql_threshold"], 50
+        )
+        self.assertEqual(
+            manifest["rathena_configuration"]["slow_script_threshold"], 25
+        )
+
+    def test_repository_observability_config_pins_threshold_keys(self):
+        config_path = (
+            REPO_ROOT / "tools" / "observability" / "observer.example.json"
+        )
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        self.assertIsInstance(config["slow_sql_threshold_ms"], int)
+        self.assertIsInstance(config["slow_script_threshold_ms"], int)
+
+    def test_missing_sql_threshold_creates_capture_error_and_ineligible(self):
+        manifest = self._capture_with_observer({"slow_script_threshold_ms": 25})
+        config = manifest["rathena_configuration"]
+        self.assertIsNone(config["slow_sql_threshold"])
+        self.assertEqual(config["slow_script_threshold"], 25)
+        self.assertIs(manifest["eligible_for_execution"], False)
+        fields = [error["field"] for error in manifest["capture_errors"]]
+        self.assertIn("rathena_configuration.slow_sql_threshold", fields)
+
+    def test_missing_script_threshold_creates_capture_error_and_ineligible(self):
+        manifest = self._capture_with_observer({"slow_sql_threshold_ms": 50})
+        config = manifest["rathena_configuration"]
+        self.assertIsNone(config["slow_script_threshold"])
+        self.assertEqual(config["slow_sql_threshold"], 50)
+        self.assertIs(manifest["eligible_for_execution"], False)
+        fields = [error["field"] for error in manifest["capture_errors"]]
+        self.assertIn("rathena_configuration.slow_script_threshold", fields)
+
+    def test_malformed_threshold_creates_capture_error_and_ineligible(self):
+        manifest = self._capture_with_observer(
+            {"slow_sql_threshold_ms": "fast", "slow_script_threshold_ms": 25}
+        )
+        self.assertIsNone(manifest["rathena_configuration"]["slow_sql_threshold"])
+        self.assertIs(manifest["eligible_for_execution"], False)
+        fields = [error["field"] for error in manifest["capture_errors"]]
+        self.assertIn("rathena_configuration.slow_sql_threshold", fields)
+
+
+def load_schema() -> dict:
+    with open(SCHEMA_PATH, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def assert_matches_schema(testcase, value, node, path="$"):
+    """Stdlib-only structural check of a manifest against the schema."""
+    if isinstance(value, dict) and isinstance(node, dict) and "properties" in node:
+        props = set(node["properties"])
+        required = set(node.get("required", []))
+        keys = set(value)
+        missing = sorted(required - keys)
+        testcase.assertEqual(missing, [], f"{path}: missing required {missing}")
+        if node.get("additionalProperties") is False:
+            extra = sorted(keys - props)
+            testcase.assertEqual(extra, [], f"{path}: unexpected keys {extra}")
+        for key, item in value.items():
+            if key in node["properties"]:
+                assert_matches_schema(
+                    testcase, item, node["properties"][key], f"{path}.{key}"
+                )
+    elif isinstance(value, list) and isinstance(node, dict) and "items" in node:
+        for index, item in enumerate(value):
+            assert_matches_schema(
+                testcase, item, node["items"], f"{path}[{index}]"
+            )
+
+
+EXPECTED_GROUP_FIELDS = {
+    "source": {
+        "repository_url",
+        "branch",
+        "git_commit_sha",
+        "git_short_sha",
+        "working_tree_clean",
+        "submodules",
+    },
+    "build": {
+        "compiler",
+        "compiler_version",
+        "build_type",
+        "build_flags",
+        "login_server_sha256",
+        "char_server_sha256",
+        "map_server_sha256",
+    },
+    "protocol": {"packetver", "packet_database_revision"},
+    "rathena_configuration": {
+        "login_config_sha256",
+        "char_config_sha256",
+        "map_config_sha256",
+        "inter_config_sha256",
+        "observability_config_sha256",
+        "slow_sql_threshold",
+        "slow_script_threshold",
+        "snapshot_interval_seconds",
+    },
+    "game_content": {
+        "script_tree_sha256",
+        "npc_content_sha256",
+        "item_database_sha256",
+        "monster_database_sha256",
+        "skill_database_sha256",
+        "map_index_sha256",
+    },
+    "database": {
+        "mariadb_version",
+        "my_cnf_sha256",
+        "schema_revision",
+        "schema_sha256",
+        "dataset_seed",
+        "dataset_sha256",
+        "row_counts",
+    },
+    "operating_system": {
+        "distribution",
+        "distribution_version",
+        "kernel_version",
+        "package_snapshot_sha256",
+        "filesystem_type",
+        "mount_options",
+        "timezone",
+        "time_sync_source",
+    },
+    "hardware": {
+        "cpu_model",
+        "physical_cores",
+        "logical_threads",
+        "ram_bytes",
+        "nvme_model",
+        "nvme_firmware",
+        "nic_model",
+        "link_speed_mbps",
+        "bios_version",
+        "cpu_governor",
+        "bios_power_profile",
+        "numa_topology",
+    },
+    "observability": {
+        "prometheus_version",
+        "node_exporter_version",
+        "mariadb_exporter_version",
+        "scrape_config_sha256",
+        "grafana_version",
+        "grafana_dashboard_sha256",
+    },
+    "load_generation": {
+        "harness_repository",
+        "harness_commit_sha",
+        "harness_binary_sha256",
+        "workload_profile_sha256",
+        "account_range",
+        "random_seed",
+        "webgl_client_revision",
+    },
+}
+
+
+class SchemaContractTests(unittest.TestCase):
+    def setUp(self):
+        self.schema = load_schema()
+        self.fixture = load_fixture()
+
+    def test_every_fixture_top_level_key_is_declared(self):
+        declared = set(self.schema["properties"])
+        undeclared = sorted(set(self.fixture) - declared)
+        self.assertEqual(undeclared, [])
+
+    def test_every_required_schema_key_is_present_in_fixture(self):
+        missing = sorted(set(self.schema["required"]) - set(self.fixture))
+        self.assertEqual(missing, [])
+
+    def test_top_level_additional_properties_is_false(self):
+        self.assertIs(self.schema["additionalProperties"], False)
+
+    def test_group_field_names_match_schema_and_fixture(self):
+        for group, fields in EXPECTED_GROUP_FIELDS.items():
+            node = self.schema["properties"][group]
+            self.assertEqual(set(node["properties"]), fields, group)
+            self.assertEqual(set(node["required"]), fields, group)
+            self.assertIs(node["additionalProperties"], False, group)
+            self.assertEqual(set(self.fixture[group]), fields, group)
+
+    def test_fixture_matches_schema_recursively(self):
+        assert_matches_schema(self, self.fixture, self.schema)
+
+    def test_obsolete_top_level_keys_are_absent(self):
+        for obsolete in ("rathena_config", "dataset"):
+            self.assertNotIn(obsolete, self.schema["properties"])
+            self.assertNotIn(obsolete, self.schema["required"])
+            self.assertNotIn(obsolete, self.fixture)
+
+    def test_capture_errors_schema_describes_structured_objects(self):
+        items = self.schema["properties"]["capture_errors"]["items"]
+        self.assertEqual(
+            set(items["required"]), {"command", "field", "return_code", "stderr"}
+        )
+        self.assertIn("timeout", items["properties"])
+        self.assertEqual(items["properties"]["command"]["type"], "array")
+        self.assertIs(items["additionalProperties"], False)
+
+    def test_identity_field_constraints(self):
+        props = self.schema["properties"]
+        self.assertEqual(props["sequence"]["type"], "integer")
+        self.assertEqual(props["sequence"]["minimum"], 1)
+        self.assertEqual(props["sequence"]["maximum"], 999)
+        self.assertEqual(props["eligible_for_execution"]["type"], "boolean")
+        self.assertEqual(props["manifest_sha256"]["pattern"], "^[0-9a-f]{64}$")
+        self.assertTrue(props["manifest_id"]["pattern"].endswith(r"-\d{3}$"))
+
+
+class EndToEndFixtureContractTests(unittest.TestCase):
+    def test_fixture_end_to_end_contract(self):
+        fixture = load_fixture()
+        self.assertEqual(_manifest_sha256(fixture), fixture["manifest_sha256"])
+        self.assertRegex(fixture["manifest_id"], MANIFEST_ID_RE)
+        self.assertEqual(manifest_id(fixture), fixture["manifest_id"])
+        self.assertEqual(fixture["capture_errors"], [])
+        self.assertIs(fixture["eligible_for_execution"], True)
+        assert_matches_schema(self, fixture, load_schema())
+        self.assertEqual(verify_manifest(fixture, copy.deepcopy(fixture)), [])
 
 
 if __name__ == "__main__":

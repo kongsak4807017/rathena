@@ -57,7 +57,7 @@
     "workload_profile_sha256": "1b724998d1ee79e4109294279385e948180bdf85ecd3231df97cbd191023a393"
   },
   "manifest_id": "a3-20260802-f82d9b0-ubuntu2404-8c16t-32g-001",
-  "manifest_sha256": "596f7705c7c255fde9bacc17f3e0888556ab448355f58b2ad1f78eb45b853633",
+  "manifest_sha256": "3874b5b598dbea7eec95c6987fccf7ff63ba6c0edde943ce519b854f02ef30ad",
   "observability": {
     "grafana_dashboard_sha256": "b50541ba734caa3c7cdcdc73fbe9fbbaffde61460511798a38cf743f621b73a9",
     "grafana_version": "11.1.0",
@@ -86,8 +86,8 @@
     "login_config_sha256": "565fbeb4bc7641d11e0461acb3556b4ca8ddb1849917bf14491f8da80b7ea49f",
     "map_config_sha256": "1e148ed2057acecf7d25963a2025ce266597485349ffcdc442092a332949e0a5",
     "observability_config_sha256": "b923f2eafccaa88c905eb12fa33081e8344511a86bd09496927a25099dca6fe5",
-    "slow_script_threshold": 5,
-    "slow_sql_threshold": 25,
+    "slow_script_threshold": 25,
+    "slow_sql_threshold": 50,
     "snapshot_interval_seconds": 5
   },
   "sequence": 1,
