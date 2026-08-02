@@ -91,10 +91,28 @@
     },
     "validity": {
       "type": "object",
-      "required": ["valid", "reasons"],
+      "required": ["valid", "reasons", "checked_gates", "run_id", "manifest_id"],
       "properties": {
         "valid": {"type": "boolean"},
-        "reasons": {"type": "array", "items": {"type": "string"}}
+        "run_id": {"type": "string"},
+        "manifest_id": {"type": "string"},
+        "checked_gates": {"type": "array", "items": {"type": "string"}},
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["code", "field", "message", "observed", "expected", "severity"],
+            "properties": {
+              "code": {"type": "string"},
+              "field": {"type": "string"},
+              "message": {"type": "string"},
+              "observed": {},
+              "expected": {},
+              "severity": {"type": "string", "enum": ["error", "info"]}
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     }

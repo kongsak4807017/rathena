@@ -1,0 +1,61 @@
+{
+  "run_id": "run-l500-n2",
+  "manifest_id": "a3-20260802-0000000-ubuntu2404-8c16t-32g-999",
+  "frozen_manifest_id": "a3-20260802-f82d9b0-ubuntu2404-8c16t-32g-001",
+  "baseline_cycle_id": "cycle-2026-08-02",
+  "load_level": 500,
+  "run_number": 2,
+  "target_synthetic_users": 500,
+  "observed_concurrency_min": 400,
+  "unexpected_disconnects": 20,
+  "connection_attempts": 500,
+  "webgl_clients_expected": 20,
+  "webgl_clients_observed": 18,
+  "webgl_launch_failures": 1,
+  "webgl_unexpected_disconnects": 0,
+  "processes": {
+    "login": {"restarts": 0, "crashes": 0, "oom": 0, "steady_state_missing": false},
+    "char": {"restarts": 0, "crashes": 0, "oom": 0, "steady_state_missing": false},
+    "map": {"restarts": 1, "crashes": 0, "oom": 0, "steady_state_missing": false},
+    "harness": {"restarts": 0, "errors": 0}
+  },
+  "background_cpu_percent_max": 12.0,
+  "packet_loss_ratio": 0.01,
+  "workload_mix": {
+    "movement_direction_changes": 0.25,
+    "idle_heartbeat": 0.2,
+    "combat": 0.25,
+    "npc_interaction": 0.1,
+    "item_inventory": 0.08,
+    "map_change_warp": 0.05,
+    "chat": 0.04,
+    "login_logout_character_select": 0.03
+  },
+  "phases": {
+    "preconditioning_seconds": 600,
+    "ramp_seconds": 250,
+    "steady_state_seconds": 1200,
+    "cooldown_seconds": 300,
+    "validation_completed": false
+  },
+  "collectors": {
+    "pidstat": {"record_present": true, "stdout_present": true, "start_error": null, "stop_error": null},
+    "sar": {"record_present": true, "stdout_present": true, "start_error": "spawn failed", "stop_error": null},
+    "iostat": {"record_present": true, "stdout_present": true, "start_error": null, "stop_error": null}
+  },
+  "load_generator": {
+    "generated_user_count": 450,
+    "workload_event_total": 1,
+    "errors": 2,
+    "restarts": 0
+  },
+  "runtime_manifest_drift": ["build.map_server_sha256 changed"],
+  "timing": {
+    "uses_monotonic_durations": true,
+    "clock_regression_count": 1,
+    "time_sync_healthy": true
+  },
+  "metric_integrity": {
+    "maximum_missing_gap_seconds": 30
+  }
+}
