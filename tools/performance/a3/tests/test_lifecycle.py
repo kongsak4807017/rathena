@@ -688,5 +688,91 @@ class ImmutabilityTests(ControllerTestBase):
             event.details["x"] = 1
 
 
+class AbortRecoveryTests(ControllerTestBase):
+    ACTIVE_PHASES = [
+        RunPhase.ENVIRONMENT_CHECK,
+        RunPhase.SERVICE_START,
+        RunPhase.PRECONDITIONING,
+        RunPhase.RAMP_UP,
+        RunPhase.STEADY_STATE,
+        RunPhase.COOL_DOWN,
+        RunPhase.VALIDATION,
+    ]
+
+    FORWARD_PATH = [
+        RunPhase.SERVICE_START,
+        RunPhase.PRECONDITIONING,
+        RunPhase.RAMP_UP,
+        RunPhase.STEADY_STATE,
+        RunPhase.COOL_DOWN,
+        RunPhase.VALIDATION,
+        RunPhase.REPORTING,
+    ]
+
+    def _advance(self, controller, target):
+        if target is RunPhase.ENVIRONMENT_CHECK:
+            return
+        for phase in self.FORWARD_PATH:
+            controller.transition(phase)
+            if phase is target:
+                return
+
+    def test_abort_from_every_active_phase_succeeds(self):
+        for target in self.ACTIVE_PHASES:
+            with self.subTest(phase=target):
+                controller, _ = self.make_controller()
+                self._advance(controller, target)
+                self.assertIs(controller.current_phase(), target)
+                event = controller.abort("reason", catastrophic=True)
+                self.assertIs(controller.current_phase(), RunPhase.ABORTED)
+                self.assertIs(event.phase, RunPhase.ABORTED)
+
+    def _assert_abort_rejected(self, controller):
+        events_before = controller.events()
+        phase_before = controller.current_phase()
+        with self.assertRaises(InvalidTransitionError):
+            controller.abort("again", catastrophic=True)
+        self.assertEqual(controller.events(), events_before)
+        self.assertIs(controller.current_phase(), phase_before)
+
+    def test_abort_from_aborted_rejected(self):
+        controller, _ = self.make_controller()
+        controller.abort("boom", catastrophic=True)
+        self._assert_abort_rejected(controller)
+
+    def test_abort_from_artifact_capture_rejected(self):
+        controller, _ = self.make_controller()
+        controller.abort("boom", catastrophic=True)
+        controller.transition(RunPhase.ARTIFACT_CAPTURE)
+        self._assert_abort_rejected(controller)
+
+    def test_abort_from_root_cause_analysis_rejected(self):
+        controller, _ = self.make_controller()
+        controller.abort("boom", catastrophic=True)
+        controller.transition(RunPhase.ARTIFACT_CAPTURE)
+        controller.transition(RunPhase.ROOT_CAUSE_ANALYSIS)
+        self._assert_abort_rejected(controller)
+
+    def test_abort_from_reporting_rejected(self):
+        controller, _ = self.make_controller()
+        self._advance(controller, RunPhase.REPORTING)
+        self._assert_abort_rejected(controller)
+
+    def test_aborted_proceeds_only_via_artifact_capture(self):
+        controller, _ = self.make_controller()
+        controller.abort("boom", catastrophic=True)
+        event = controller.transition(RunPhase.ARTIFACT_CAPTURE)
+        self.assertIs(controller.current_phase(), RunPhase.ARTIFACT_CAPTURE)
+        self.assertIs(event.phase, RunPhase.ARTIFACT_CAPTURE)
+
+    def test_artifact_capture_proceeds_only_via_root_cause_analysis(self):
+        controller, _ = self.make_controller()
+        controller.abort("boom", catastrophic=True)
+        controller.transition(RunPhase.ARTIFACT_CAPTURE)
+        event = controller.transition(RunPhase.ROOT_CAUSE_ANALYSIS)
+        self.assertIs(controller.current_phase(), RunPhase.ROOT_CAUSE_ANALYSIS)
+        self.assertIs(event.phase, RunPhase.ROOT_CAUSE_ANALYSIS)
+
+
 if __name__ == "__main__":
     unittest.main()

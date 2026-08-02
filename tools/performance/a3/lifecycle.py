@@ -82,6 +82,20 @@ _FORWARD = {
 
 _TERMINAL = frozenset({RunPhase.REPORTING, RunPhase.ROOT_CAUSE_ANALYSIS})
 
+# abort() may only leave an active successful-path phase. Recovery phases
+# (ABORTED, ARTIFACT_CAPTURE) and terminal phases are one-way.
+_ABORTABLE = frozenset(
+    {
+        RunPhase.ENVIRONMENT_CHECK,
+        RunPhase.SERVICE_START,
+        RunPhase.PRECONDITIONING,
+        RunPhase.RAMP_UP,
+        RunPhase.STEADY_STATE,
+        RunPhase.COOL_DOWN,
+        RunPhase.VALIDATION,
+    }
+)
+
 
 # ---------------------------------------------------------------------------
 # Command and event records
@@ -282,9 +296,10 @@ class RunController:
         return event
 
     def abort(self, reason: str, catastrophic: bool) -> RunEvent:
-        if self._phase in _TERMINAL:
+        if self._phase not in _ABORTABLE:
             raise InvalidTransitionError(
-                f"{self._phase.value} is terminal; cannot abort"
+                f"cannot abort from {self._phase.value}; abort is only "
+                "allowed from an active successful-path phase"
             )
         event = self._append_event(
             phase=RunPhase.ABORTED,
