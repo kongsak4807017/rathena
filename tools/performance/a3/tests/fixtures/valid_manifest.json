@@ -1,0 +1,102 @@
+{
+  "build": {
+    "build_flags": "-O2",
+    "build_type": "Release",
+    "char_server_sha256": "0fba8577849d03faa158e676c44d7a4e595baec28db9818ea962d389b5bc292c",
+    "compiler": "gcc",
+    "compiler_version": "13.2.0",
+    "login_server_sha256": "c1a104014660b83207a5fa2c3613c86ad702d759033d7190e1ea1841131f1808",
+    "map_server_sha256": "e8ee30370fe6e060e1eca7c36d2fb9a39485564a2a255eb2086b393f4654968b"
+  },
+  "capture_errors": [],
+  "created_utc": "2026-08-02T19:00:00Z",
+  "database": {
+    "dataset_seed": 20260802,
+    "dataset_sha256": "cbc680ae71aecb314c7f3d42e57e4d860e1de02605873db4be3700c6459732c2",
+    "mariadb_version": "10.11.8-MariaDB",
+    "my_cnf_sha256": "65bba4a573d65c69228815eda51896973c82e38721e6b6b5b8ba03b23c567e73",
+    "row_counts": {
+      "accounts": 6000,
+      "characters": 12000,
+      "guilds": 200,
+      "parties": 500
+    },
+    "schema_revision": "2222222222222222222222222222222222222222",
+    "schema_sha256": "754ff0b09e16d39c2705061deea03741ee926abdd9ecc7c63c4426a6570221e0"
+  },
+  "eligible_for_execution": true,
+  "game_content": {
+    "item_database_sha256": "080bd6a0ba2fe783d7cc16fa5bc1121ec8f0ccd9c657f9c26119644d38b37100",
+    "map_index_sha256": "5fe2a997fbc07fa100b96c88e2639e25807165e57838500d9c86159117c331f3",
+    "monster_database_sha256": "37b3a70a986da3a295dd7ed8e7e90ef70c5bcda230c3ea0c26f79dd36766ec78",
+    "npc_content_sha256": "efa678e8c843f8295975986819a52eb5172853175e8969a9a33097c30ce708a1",
+    "script_tree_sha256": "da317067f46cd95a1e8ab3c99a6edd012bf502f276d34349517b44af39af998a",
+    "skill_database_sha256": "b9e91615be8a59fc0a5d02f697156fc454182a75f456c55e206472ccfb8c3f57"
+  },
+  "hardware": {
+    "bios_power_profile": "performance",
+    "bios_version": "2.7.0",
+    "cpu_governor": "performance",
+    "cpu_model": "AMD EPYC 7763 64-Core Processor",
+    "link_speed_mbps": 10000,
+    "logical_threads": 16,
+    "nic_model": "Mellanox Technologies MT27710 Family [ConnectX-4 Lx]",
+    "numa_topology": "1 node(s)",
+    "nvme_firmware": "GDC5602Q",
+    "nvme_model": "Samsung MZQL23T8HCLS-00A07",
+    "physical_cores": 8,
+    "ram_bytes": 33734471680
+  },
+  "load_generation": {
+    "account_range": "1-6000",
+    "harness_binary_sha256": "96ee98b9c31ae7853965da28df6410942dee5cc090a7b063c50fb6e087b63e47",
+    "harness_commit_sha": "3333333333333333333333333333333333333333",
+    "harness_repository": "https://github.com/kongsak4807017/rathena",
+    "random_seed": 20260802,
+    "webgl_client_revision": "a3-webgl-v1",
+    "workload_profile_sha256": "1b724998d1ee79e4109294279385e948180bdf85ecd3231df97cbd191023a393"
+  },
+  "manifest_id": "a3-20260802-f82d9b0-ubuntu2404-8c16t-32g-001",
+  "manifest_sha256": "596f7705c7c255fde9bacc17f3e0888556ab448355f58b2ad1f78eb45b853633",
+  "observability": {
+    "grafana_dashboard_sha256": "b50541ba734caa3c7cdcdc73fbe9fbbaffde61460511798a38cf743f621b73a9",
+    "grafana_version": "11.1.0",
+    "mariadb_exporter_version": "0.15.1",
+    "node_exporter_version": "1.8.2",
+    "prometheus_version": "2.53.0",
+    "scrape_config_sha256": "eba10c79a11780b63d9a250b66db8322ca19e6d2f6c6b3ac0f57d512b88cab7f"
+  },
+  "operating_system": {
+    "distribution": "ubuntu",
+    "distribution_version": "24.04",
+    "filesystem_type": "ext4",
+    "kernel_version": "6.8.0-41-generic",
+    "mount_options": "rw,noatime",
+    "package_snapshot_sha256": "a30ac1f64ccbb99dfefd614950c68a64873ee64844cbd15c064cb5218d63904b",
+    "time_sync_source": "ntp.ubuntu.com",
+    "timezone": "UTC"
+  },
+  "protocol": {
+    "packet_database_revision": "1111111111111111111111111111111111111111",
+    "packetver": 20211103
+  },
+  "rathena_configuration": {
+    "char_config_sha256": "8548c6cd3bca8e8f8198b21736fc3e49ee93bf2d0538fce314f7e10b49f54a22",
+    "inter_config_sha256": "8c45429867f5b5c4b59b8bc2e38b033934bff0c4660949a9007591b2309e9810",
+    "login_config_sha256": "565fbeb4bc7641d11e0461acb3556b4ca8ddb1849917bf14491f8da80b7ea49f",
+    "map_config_sha256": "1e148ed2057acecf7d25963a2025ce266597485349ffcdc442092a332949e0a5",
+    "observability_config_sha256": "b923f2eafccaa88c905eb12fa33081e8344511a86bd09496927a25099dca6fe5",
+    "slow_script_threshold": 5,
+    "slow_sql_threshold": 25,
+    "snapshot_interval_seconds": 5
+  },
+  "sequence": 1,
+  "source": {
+    "branch": "feat/a3-baseline-toolchain",
+    "git_commit_sha": "f82d9b00e28d6b8dba6abddce90ed50a433d42a1",
+    "git_short_sha": "f82d9b0",
+    "repository_url": "https://github.com/kongsak4807017/rathena",
+    "submodules": {},
+    "working_tree_clean": true
+  }
+}
