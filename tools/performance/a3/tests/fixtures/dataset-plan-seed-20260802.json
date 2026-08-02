@@ -1,0 +1,67 @@
+{
+  "first_account": {
+    "account_id": 2000001,
+    "username": "a3_account_000001"
+  },
+  "first_character": {
+    "char_id": 3000001,
+    "name": "A3Char000001"
+  },
+  "first_guild": {
+    "guild_id": 400001,
+    "name": "A3Guild001"
+  },
+  "first_party": {
+    "name": "A3Party001",
+    "party_id": 500001
+  },
+  "last_account": {
+    "account_id": 2006000,
+    "username": "a3_account_006000"
+  },
+  "last_character": {
+    "char_id": 3012000,
+    "name": "A3Char012000"
+  },
+  "last_guild": {
+    "guild_id": 400200,
+    "name": "A3Guild200"
+  },
+  "last_party": {
+    "name": "A3Party500",
+    "party_id": 500500
+  },
+  "plan_sha256": "37cc4298a09214d4973f18cf792bda83bc6fe36ff57ff554307989a07fa22053",
+  "profile_counts": {
+    "inventory": {
+      "empty": 1238,
+      "heavy": 1867,
+      "light": 4233,
+      "medium": 4662
+    },
+    "quest": {
+      "empty": 1153,
+      "heavy": 1780,
+      "light": 4230,
+      "medium": 4837
+    },
+    "storage": {
+      "empty": 1235,
+      "heavy": 1769,
+      "light": 4286,
+      "medium": 4710
+    }
+  },
+  "relationship_counts": {
+    "characters_per_account": 2,
+    "guild_memberships": 4341,
+    "party_memberships": 3474
+  },
+  "row_counts": {
+    "accounts": 6000,
+    "characters": 12000,
+    "guilds": 200,
+    "parties": 500
+  },
+  "seed": 20260802
+}
