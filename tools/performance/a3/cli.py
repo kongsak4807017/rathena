@@ -793,36 +793,140 @@ def _cmd_run(args, deps: CLIDependencies) -> int:
         artifact_root=Path(args.artifact_root),
         phase=RunPhase.STEADY_STATE,
     )
-    collectors.start(context)
+    try:
+        collectors.start(context)
+    except Exception as exc:
+        raise CLIError(EXIT_OPERATIONAL, f"collector start failed: {exc}") from None
+
+    harness = None
+    primary_error = None
+    stop_error = None
+    catastrophic_result = False
     try:
         harness = _require(deps.run_harness, "run_harness")(request)
+        if harness.get("catastrophic"):
+            # Confirmed catastrophic result: invoke the abort path before
+            # the finally-guaranteed collector stop.
+            catastrophic_result = True
+            controller.abort("harness reported a catastrophic result", catastrophic=True)
+        else:
+            controller.run_preconditioning()
+            controller.run_ramp_up()
+            controller.run_steady_state()
+            controller.run_cooldown()
     except Exception as exc:
-        # Catastrophic operational failure: preserve evidence, then mark the
-        # cycle catastrophic only after preservation has completed.
+        primary_error = exc
+        if _is_confirmed_catastrophic(exc):
+            try:
+                controller.abort(str(exc), catastrophic=True)
+            except Exception:  # noqa: BLE001 - abort is best-effort here
+                pass
+    finally:
         try:
-            controller.abort(str(exc), catastrophic=True)
-        finally:
             collectors.stop()
-        _write_state(
-            deps,
-            dataclasses.replace(state, catastrophic=True, last_error=str(exc)),
+        except Exception as exc:  # noqa: BLE001 - recorded deterministically
+            stop_error = exc
+
+    if primary_error is not None and not _is_confirmed_catastrophic(primary_error):
+        # Operational failure: no automatic catastrophic claim.
+        message = f"run execution failed: {primary_error}"
+        if stop_error is not None:
+            message += f"; collector stop also failed: {stop_error}"
+        raise CLIError(EXIT_OPERATIONAL, message) from None
+
+    if primary_error is not None:
+        # Confirmed catastrophic exception before offline evaluation; the
+        # harness contract inputs may be unavailable.
+        return _preserve_catastrophic_run(deps, args, state, run_id, harness, None, None)
+
+    if stop_error is not None:
+        raise CLIError(EXIT_OPERATIONAL, f"collector stop failed: {stop_error}") from None
+
+    if catastrophic_result:
+        # Harness already reported the catastrophic signal: preserve
+        # immediately without offline evaluation.
+        return _preserve_catastrophic_run(deps, args, state, run_id, harness, None, None)
+
+    try:
+        controller.run_validation()
+        controller.run_reporting()
+        validity = _require(deps.evaluate_validity, "evaluate_validity")(harness["run_data"])
+        thresholds = _require(deps.load_slo_thresholds, "load_slo_thresholds")()
+        slo_result = _require(deps.evaluate_slos, "evaluate_slos")(
+            validity, harness["metric_bundle"], thresholds
         )
-        raise CLIError(EXIT_OPERATIONAL, f"workload harness failed: {exc}") from None
-    controller.run_preconditioning()
-    controller.run_ramp_up()
-    controller.run_steady_state()
-    controller.run_cooldown()
-    collectors.stop()
-    controller.run_validation()
-    controller.run_reporting()
+    except CLIError:
+        raise
+    except Exception as exc:
+        raise CLIError(EXIT_OPERATIONAL, f"offline evaluation failed: {exc}") from None
 
-    validity = _require(deps.evaluate_validity, "evaluate_validity")(harness["run_data"])
-    thresholds = _require(deps.load_slo_thresholds, "load_slo_thresholds")()
-    slo_result = _require(deps.evaluate_slos, "evaluate_slos")(
-        validity, harness["metric_bundle"], thresholds
+    if slo_result.catastrophic_signals:
+        controller.abort("catastrophic SLO signal", catastrophic=True)
+        return _preserve_catastrophic_run(
+            deps, args, state, run_id, harness, validity, slo_result
+        )
+
+    artifacts = _write_checked_artifacts(
+        deps,
+        args,
+        state,
+        run_id,
+        harness,
+        validity,
+        slo_result,
+        final_phase="REPORTING",
+        verdict=slo_result.status.value,
+        valid_flag=bool(validity.valid),
     )
+    entry = {
+        "run_id": run_id,
+        "load_level": args.users,
+        "run_number": args.run,
+        "valid": bool(validity.valid),
+        "verdict": slo_result.status.value,
+        "manifest_id": state.manifest_id,
+        "catastrophic": False,
+        "metrics": harness.get("metrics", {}),
+    }
+    runs = tuple(state.runs) + (entry,)
+    _write_state(deps, dataclasses.replace(state, runs=runs, last_error=None))
+    _print(
+        deps,
+        {
+            "command": "run",
+            "baseline_cycle_id": state.baseline_cycle_id,
+            "run_id": run_id,
+            "valid": bool(validity.valid),
+            "verdict": slo_result.status.value,
+            "catastrophic": False,
+            "artifacts": artifacts if isinstance(artifacts, Mapping) else {"complete": True},
+            "dry_run": False,
+        },
+    )
+    return EXIT_OK
 
-    final_phase = "REPORTING"
+
+def _is_confirmed_catastrophic(exc: BaseException) -> bool:
+    """Catastrophic only when an adapter explicitly says so."""
+    if getattr(exc, "catastrophic", None) is True:
+        return True
+    from tools.performance.a3.lifecycle import CatastrophicRunError
+
+    return isinstance(exc, CatastrophicRunError)
+
+
+def _write_checked_artifacts(
+    deps,
+    args,
+    state: CycleState,
+    run_id: str,
+    harness: Mapping,
+    validity,
+    slo_result,
+    final_phase: str,
+    verdict: str,
+    valid_flag: bool,
+):
     run_payload = {
         "version": 1,
         "baseline_cycle_id": state.baseline_cycle_id,
@@ -831,29 +935,40 @@ def _cmd_run(args, deps: CLIDependencies) -> int:
         "load_level": args.users,
         "run_number": args.run,
         "validity": {
-            "valid": bool(validity.valid),
-            "reasons": [getattr(reason, "message", str(reason)) for reason in validity.reasons],
+            "valid": valid_flag,
+            "reasons": (
+                [getattr(reason, "message", str(reason)) for reason in validity.reasons]
+                if validity is not None
+                else []
+            ),
         },
         "final_phase": final_phase,
         "artifact_status": "complete",
         "created_utc": harness.get("created_utc"),
     }
-    verdict = slo_result.status.value
     summary_payload = {
         "version": 1,
         "run_id": run_id,
         "manifest_id": state.manifest_id,
         "load_level": args.users,
         "verdict": verdict,
-        "valid": bool(validity.valid),
+        "valid": valid_flag,
         "median_metrics": harness.get("metrics", {}),
         "worst_metrics": harness.get("worst_metrics", {}),
         "warnings": [],
         "failures": [],
         "primary_bottleneck": None,
     }
+    if slo_result is None:
+        slo_result = {
+            "status": "BLOCKED",
+            "evaluations": [],
+            "catastrophic_signals": [],
+            "evaluated_metrics": [],
+            "blocked_metrics": [],
+        }
     try:
-        artifacts = _require(deps.write_run_artifacts, "write_run_artifacts")(
+        return _require(deps.write_run_artifacts, "write_run_artifacts")(
             artifact_root=Path(args.artifact_root),
             baseline_cycle_id=state.baseline_cycle_id,
             run_payload=run_payload,
@@ -865,47 +980,71 @@ def _cmd_run(args, deps: CLIDependencies) -> int:
             prometheus_queries=harness["prometheus_queries"],
             source_files=harness["source_files"],
         )
+    except CLIError:
+        raise
     except Exception as exc:
         raise CLIError(EXIT_OPERATIONAL, f"run artifact write failed: {exc}") from None
 
-    catastrophic = bool(harness.get("catastrophic")) or bool(
-        slo_result is not None and slo_result.catastrophic_signals
+
+def _preserve_catastrophic_run(
+    deps,
+    args,
+    state: CycleState,
+    run_id: str,
+    harness,
+    validity,
+    slo_result,
+) -> int:
+    """Preserve evidence for a confirmed catastrophic run, then mark state.
+
+    The cycle becomes catastrophic only after artifact checksums complete;
+    a preservation failure stays operational and changes nothing.
+    """
+    from tools.performance.a3.reporting import SOURCE_FILE_KEYS
+
+    if harness is None or set(harness.get("source_files", {})) != set(SOURCE_FILE_KEYS):
+        raise CLIError(
+            EXIT_OPERATIONAL,
+            "catastrophic artifact preservation failed: required source set unavailable",
+        )
+    artifacts = _write_checked_artifacts(
+        deps,
+        args,
+        state,
+        run_id,
+        harness,
+        validity,
+        slo_result,
+        final_phase="ARTIFACT_CAPTURE",
+        verdict="BLOCKED",
+        valid_flag=bool(validity.valid) if validity is not None else False,
     )
-    verdict = slo_result.status.value if slo_result is not None else "BLOCKED"
     entry = {
         "run_id": run_id,
         "load_level": args.users,
         "run_number": args.run,
-        "valid": bool(validity.valid),
-        "verdict": verdict,
+        "valid": bool(validity.valid) if validity is not None else False,
+        "verdict": "BLOCKED",
         "manifest_id": state.manifest_id,
-        "catastrophic": catastrophic,
+        "catastrophic": True,
         "metrics": harness.get("metrics", {}),
     }
     runs = tuple(state.runs) + (entry,)
-    new_state = dataclasses.replace(
-        state,
-        runs=runs,
-        catastrophic=catastrophic or state.catastrophic,
-        last_error=None,
-    )
-    _write_state(deps, new_state)
+    _write_state(deps, dataclasses.replace(state, runs=runs, catastrophic=True))
     _print(
         deps,
         {
             "command": "run",
             "baseline_cycle_id": state.baseline_cycle_id,
             "run_id": run_id,
-            "valid": bool(validity.valid),
-            "verdict": verdict,
-            "catastrophic": catastrophic,
+            "valid": entry["valid"],
+            "verdict": "BLOCKED",
+            "catastrophic": True,
             "artifacts": artifacts if isinstance(artifacts, Mapping) else {"complete": True},
             "dry_run": False,
         },
     )
-    if catastrophic:
-        return EXIT_CATASTROPHIC
-    return EXIT_OK
+    return EXIT_CATASTROPHIC
 
 
 def _cmd_evaluate(args, deps: CLIDependencies) -> int:

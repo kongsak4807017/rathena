@@ -274,6 +274,119 @@ def run_main(argv, deps):
     return main(argv, dependencies=deps)
 
 
+def controller_factory_with_failures(calls, failures=None):
+    failures = failures or {}
+
+    class Controller:
+        def _check(self, name):
+            if name in failures:
+                raise failures[name]
+
+        def run_preflight(self):
+            self._check("preflight")
+            calls.record("lifecycle.preflight")
+
+        def run_service_start(self, commands):
+            self._check("service_start")
+            calls.record("lifecycle.service_start")
+
+        def run_preconditioning(self):
+            self._check("preconditioning")
+            calls.record("lifecycle.preconditioning")
+
+        def run_ramp_up(self):
+            self._check("ramp_up")
+            calls.record("lifecycle.ramp_up")
+
+        def run_steady_state(self):
+            self._check("steady_state")
+            calls.record("lifecycle.steady_state")
+
+        def run_cooldown(self):
+            self._check("cooldown")
+            calls.record("lifecycle.cooldown")
+
+        def run_validation(self):
+            self._check("validation")
+            calls.record("lifecycle.validation")
+
+        def run_reporting(self):
+            self._check("reporting")
+            calls.record("lifecycle.reporting")
+
+        def abort(self, reason, catastrophic=False):
+            calls.record("lifecycle.abort", reason)
+
+    def factory(request):
+        calls.record("create_run_controller", request)
+        return Controller()
+
+    return factory
+
+
+def collectors_factory_with_failures(calls, fail_start=False, fail_stop=False):
+    class Collectors:
+        def start(self, context):
+            calls.record("collectors.start", context)
+            if fail_start:
+                raise RuntimeError("start failed")
+
+        def stop(self):
+            calls.record("collectors.stop")
+            if fail_stop:
+                raise RuntimeError("stop jammed")
+
+    def factory(request):
+        calls.record("create_collectors")
+        return Collectors()
+
+    return factory
+
+
+class RecordingStore:
+    def __init__(self, store, calls):
+        self._store = store
+        self._calls = calls
+
+    def path_for(self, cycle):
+        return self._store.path_for(cycle)
+
+    def exists(self, cycle):
+        return self._store.exists(cycle)
+
+    def read(self, cycle):
+        return self._store.read(cycle)
+
+    def write(self, state):
+        self._calls.record("state.write")
+        return self._store.write(state)
+
+
+def full_source_harness(calls, catastrophic=False):
+    from tools.performance.a3.tests.test_reporting import build_source_files
+
+    def harness(request):
+        calls.record("run_harness", request["run_id"])
+        sources = build_source_files(
+            Path(request["artifact_root"]) / "raw-run-src"
+        )
+        return {
+            "run_data": {"run_id": request["run_id"]},
+            "metric_bundle": {},
+            "catastrophic": catastrophic,
+            "metrics": {},
+            "worst_metrics": {},
+            "timeseries_rows": [],
+            "workload_rows": [],
+            "anomalies": [],
+            "prometheus_queries": {"start": 0, "end": 0, "step": 5, "queries": []},
+            "source_files": sources,
+            "created_utc": "2026-08-02T20:00:00Z",
+        }
+
+    return harness
+
+
 class CliTestBase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -572,10 +685,10 @@ class RunTests(CliTestBase):
         self.assertEqual(code, EXIT_OPERATIONAL)
         names = calls.names()
         self.assertIn("collectors.stop", names)
-        self.assertIn("lifecycle.abort", names)
         self.assertLess(names.index("run_harness"), names.index("collectors.stop"))
         state = self.store().read(CYCLE)
-        self.assertTrue(state.catastrophic)
+        self.assertFalse(state.catastrophic)
+        self.assertEqual(names.count("collectors.stop"), 1)
 
     def test_valid_fail_run_allows_continuation(self):
         self.write_state(controls=CONTROLS_DONE)
@@ -597,20 +710,9 @@ class RunTests(CliTestBase):
     def test_catastrophic_run_blocks_cycle(self):
         self.write_state(controls=CONTROLS_DONE)
         deps, calls, _ = make_deps(self.root)
-        full = {
-            "run_data": {"run_id": "run-l500-n1"},
-            "metric_bundle": {},
-            "catastrophic": True,
-            "metrics": {},
-            "worst_metrics": {},
-            "timeseries_rows": [],
-            "workload_rows": [],
-            "anomalies": [],
-            "prometheus_queries": {"start": 0, "end": 0, "step": 5, "queries": []},
-            "source_files": {},
-            "created_utc": "2026-08-02T20:00:00Z",
-        }
-        deps = dataclasses.replace(deps, run_harness=lambda request: full)
+        deps = dataclasses.replace(
+            deps, run_harness=full_source_harness(calls, catastrophic=True)
+        )
         code = run_main(self._argv(), deps)
         self.assertEqual(code, EXIT_CATASTROPHIC)
         state = self.store().read(CYCLE)
@@ -1038,6 +1140,280 @@ class OutputTests(CliTestBase):
 
         self.assertTrue(callable(package.main))
         self.assertTrue(callable(package.build_parser))
+
+
+class CollectorSafetyTests(CliTestBase):
+    def _argv(self):
+        return ["run", "--cycle", CYCLE, "--users", "500", "--run", "1", "--artifact-root", str(self.root)]
+
+    def test_stop_called_once_on_each_lifecycle_failure(self):
+        from tools.performance.a3.lifecycle import CatastrophicRunError
+
+        cases = {
+            "harness": RuntimeError("harness crashed"),
+            "preconditioning": RuntimeError("preconditioning failed"),
+            "ramp_up": RuntimeError("ramp failed"),
+            "steady_state": RuntimeError("steady failed"),
+            "cooldown": RuntimeError("cooldown failed"),
+            "validation": RuntimeError("validation failed"),
+            "reporting": RuntimeError("reporting failed"),
+        }
+        for index, (phase, error) in enumerate(cases.items()):
+            with self.subTest(phase=phase):
+                root = Path(self._tmp.name) / f"root-{phase}"
+                root.mkdir()
+                CycleStateStore(root).write(make_state(root, controls=CONTROLS_DONE))
+                calls = FakeCalls()
+                harness_error = error if phase == "harness" else None
+                deps, calls, _ = make_deps(
+                    root,
+                    calls=calls,
+                    create_run_controller=controller_factory_with_failures(
+                        calls, {} if phase == "harness" else {phase: error}
+                    ),
+                    run_harness=(
+                        (lambda request: (_ for _ in ()).throw(error))
+                        if phase == "harness"
+                        else full_source_harness(calls)
+                    ),
+                )
+                code = run_main(
+                    ["run", "--cycle", CYCLE, "--users", "500", "--run", "1", "--artifact-root", str(root)],
+                    deps,
+                )
+                self.assertEqual(code, EXIT_OPERATIONAL, phase)
+                self.assertEqual(calls.names().count("collectors.stop"), 1, phase)
+                state = CycleStateStore(root).read(CYCLE)
+                self.assertFalse(state.catastrophic, phase)
+                self.assertEqual(len(state.runs), 0, phase)
+
+    def test_start_failure_means_no_stop(self):
+        self.write_state(controls=CONTROLS_DONE)
+        deps, calls, _ = make_deps(
+            self.root,
+            create_collector_controller=collectors_factory_with_failures(FakeCalls(), fail_start=True),
+        )
+        # Use the same calls object for consistent counting.
+        calls = FakeCalls()
+        deps = dataclasses.replace(
+            deps,
+            create_collector_controller=collectors_factory_with_failures(calls, fail_start=True),
+        )
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OPERATIONAL)
+        self.assertEqual(calls.names().count("collectors.stop"), 0)
+
+    def test_normal_run_stop_exactly_once(self):
+        self.write_state(controls=CONTROLS_DONE)
+        deps, calls, _ = make_deps(self.root)
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OK)
+        self.assertEqual(calls.names().count("collectors.stop"), 1)
+
+    def test_stop_failure_after_success_is_operational(self):
+        self.write_state(controls=CONTROLS_DONE)
+        calls = FakeCalls()
+        deps, calls, outputs = make_deps(
+            self.root,
+            calls=calls,
+            create_collector_controller=collectors_factory_with_failures(calls, fail_stop=True),
+        )
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OPERATIONAL)
+        self.assertEqual(calls.names().count("collectors.stop"), 1)
+        stderr = [o for o in outputs if isinstance(o, tuple) and o[0] == "ERR"]
+        self.assertIn("stop jammed", str(stderr))
+
+    def test_dual_failure_preserves_both_errors(self):
+        self.write_state(controls=CONTROLS_DONE)
+        calls = FakeCalls()
+
+        def bad_harness(request):
+            calls.record("run_harness")
+            raise RuntimeError("harness crashed")
+
+        deps, calls, outputs = make_deps(
+            self.root,
+            calls=calls,
+            run_harness=bad_harness,
+            create_collector_controller=collectors_factory_with_failures(calls, fail_stop=True),
+        )
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OPERATIONAL)
+        self.assertEqual(calls.names().count("collectors.stop"), 1)
+        stderr = str([o for o in outputs if isinstance(o, tuple) and o[0] == "ERR"])
+        self.assertIn("harness crashed", stderr)
+        self.assertIn("stop jammed", stderr)
+
+
+class FailureClassificationTests(CliTestBase):
+    def _argv(self):
+        return ["run", "--cycle", CYCLE, "--users", "500", "--run", "1", "--artifact-root", str(self.root)]
+
+    def _recording_deps(self, root, calls, **overrides):
+        deps, calls, outputs = make_deps(root, calls=calls, **overrides)
+        return dataclasses.replace(
+            deps, state_store=RecordingStore(CycleStateStore(root), calls)
+        ), calls, outputs
+
+    def test_confirmed_catastrophic_harness_result(self):
+        self.write_state(controls=CONTROLS_DONE)
+        calls = FakeCalls()
+        deps, calls, _ = self._recording_deps(
+            self.root, calls, run_harness=full_source_harness(calls, catastrophic=True)
+        )
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_CATASTROPHIC)
+        names = calls.names()
+        self.assertEqual(
+            names,
+            [
+                "load_config",
+                "load_manifest",
+                "capture_runtime_manifest",
+                "verify_manifest",
+                "create_run_controller",
+                "lifecycle.preflight",
+                "lifecycle.service_start",
+                "create_collectors",
+                "collectors.start",
+                "run_harness",
+                "lifecycle.abort",
+                "collectors.stop",
+                "write_run_artifacts",
+                "state.write",
+            ],
+        )
+        writer = [p for n, p in calls.calls if n == "write_run_artifacts"][0]
+        self.assertEqual(
+            set(writer),
+            {
+                "artifact_root",
+                "baseline_cycle_id",
+                "run_payload",
+                "summary_payload",
+                "timeseries_rows",
+                "workload_rows",
+                "slo_result",
+                "anomalies",
+                "prometheus_queries",
+                "source_files",
+            },
+        )
+        self.assertEqual(writer["run_payload"]["final_phase"], "ARTIFACT_CAPTURE")
+        self.assertEqual(writer["summary_payload"]["verdict"], "BLOCKED")
+        state = self.store().read(CYCLE)
+        self.assertTrue(state.catastrophic)
+        self.assertEqual(len(state.runs), 1)
+        self.assertFalse(state.runs[0]["valid"])
+        self.assertEqual(state.runs[0]["verdict"], "BLOCKED")
+        self.assertTrue(state.runs[0]["catastrophic"])
+
+    def test_confirmed_catastrophic_phase_exception(self):
+        from tools.performance.a3.lifecycle import CatastrophicRunError
+
+        self.write_state(controls=CONTROLS_DONE)
+        calls = FakeCalls()
+        deps, calls, _ = self._recording_deps(
+            self.root,
+            calls,
+            create_run_controller=controller_factory_with_failures(
+                calls, {"preconditioning": CatastrophicRunError("server crashed")}
+            ),
+            run_harness=full_source_harness(calls),
+        )
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_CATASTROPHIC)
+        names = calls.names()
+        self.assertEqual(calls.names().count("collectors.stop"), 1)
+        self.assertLess(names.index("lifecycle.abort"), names.index("collectors.stop"))
+        self.assertLess(names.index("collectors.stop"), names.index("write_run_artifacts"))
+        self.assertLess(names.index("write_run_artifacts"), names.index("state.write"))
+        state = self.store().read(CYCLE)
+        self.assertTrue(state.catastrophic)
+        self.assertEqual(state.runs[0]["verdict"], "BLOCKED")
+
+    def test_catastrophic_slo_signal(self):
+        self.write_state(controls=CONTROLS_DONE)
+        calls = FakeCalls()
+        deps, calls, _ = self._recording_deps(
+            self.root,
+            calls,
+            run_harness=full_source_harness(calls),
+            evaluate_slos=lambda v, b, t: types.SimpleNamespace(
+                catastrophic_signals=("sig",), status=MetricVerdict.BLOCKED
+            ),
+        )
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_CATASTROPHIC)
+        self.assertIn("lifecycle.abort", calls.names())
+        state = self.store().read(CYCLE)
+        self.assertTrue(state.catastrophic)
+
+    def test_preservation_failure_keeps_operational(self):
+        self.write_state(controls=CONTROLS_DONE)
+        calls = FakeCalls()
+
+        def bad_writer(**kwargs):
+            calls.record("write_run_artifacts")
+            raise RuntimeError("checksum failed")
+
+        deps, calls, _ = self._recording_deps(
+            self.root,
+            calls,
+            run_harness=full_source_harness(calls, catastrophic=True),
+            write_run_artifacts=bad_writer,
+        )
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OPERATIONAL)
+        self.assertEqual(calls.names().count("collectors.stop"), 1)
+        state = self.store().read(CYCLE)
+        self.assertFalse(state.catastrophic)
+        self.assertEqual(len(state.runs), 0)
+
+    def test_harness_exception_not_inferred_catastrophic(self):
+        self.write_state(controls=CONTROLS_DONE)
+
+        def bad_harness(request):
+            raise RuntimeError("harness crashed")
+
+        deps, calls, _ = make_deps(self.root, run_harness=bad_harness)
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OPERATIONAL)
+        state = self.store().read(CYCLE)
+        self.assertFalse(state.catastrophic)
+        self.assertEqual(len(state.runs), 0)
+
+
+class RunOrderingTests(CliTestBase):
+    def test_normal_order(self):
+        self.write_state(controls=CONTROLS_DONE)
+        calls = FakeCalls()
+        deps, calls, _ = make_deps(self.root, calls=calls)
+        deps = dataclasses.replace(
+            deps, state_store=RecordingStore(CycleStateStore(self.root), calls)
+        )
+        code = run_main(
+            ["run", "--cycle", CYCLE, "--users", "500", "--run", "1", "--artifact-root", str(self.root)],
+            deps,
+        )
+        self.assertEqual(code, EXIT_OK)
+        names = calls.names()
+        expected = [
+            "collectors.start",
+            "run_harness",
+            "lifecycle.preconditioning",
+            "lifecycle.ramp_up",
+            "lifecycle.steady_state",
+            "lifecycle.cooldown",
+            "collectors.stop",
+            "evaluate_validity",
+            "evaluate_slos",
+            "write_run_artifacts",
+            "state.write",
+        ]
+        positions = [names.index(step) for step in expected]
+        self.assertEqual(positions, sorted(positions))
 
 
 if __name__ == "__main__":
