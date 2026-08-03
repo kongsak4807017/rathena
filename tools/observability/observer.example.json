@@ -8,6 +8,8 @@
     {"name": "map-server", "command_contains": "map-server"}
   ],
   "tcp_ports": [6900, 6121, 5121],
+  "slow_sql_threshold_ms": 50,
+  "slow_script_threshold_ms": 25,
   "mysql_probe": {
     "enabled": false,
     "command": ["mysql", "--batch", "--skip-column-names", "-e", "SELECT 1"],

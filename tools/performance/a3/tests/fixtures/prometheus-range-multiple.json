@@ -1,0 +1,32 @@
+{
+  "status": "success",
+  "data": {
+    "resultType": "matrix",
+    "result": [
+      {
+        "metric": {
+          "__name__": "node_load1",
+          "instance": "127.0.0.1:9100",
+          "zone": "b"
+        },
+        "values": [
+          [1010, "2"],
+          [1000, "1"],
+          [1005, "1.5"]
+        ]
+      },
+      {
+        "metric": {
+          "__name__": "node_load1",
+          "instance": "127.0.0.1:9100",
+          "zone": "a"
+        },
+        "values": [
+          [1005, "4"],
+          [1000, "3"],
+          [1010, "5"]
+        ]
+      }
+    ]
+  }
+}

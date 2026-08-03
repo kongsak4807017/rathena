@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "approval_state": "APPROVED",
+  "manifest_id": "a3-20260801-a1b2c3d-ubuntu2404-8c16t-32g-001",
+  "levels": {
+    "500": {
+      "verdict": "PASS",
+      "median_metrics": {
+        "cpu_p95_percent": 60.0,
+        "memory_per_user_bytes": 1000000,
+        "latency_p95_ms": 10.0,
+        "latency_p99_ms": 20.0,
+        "throughput_per_second": 500.0,
+        "error_rate": 0.001
+      }
+    },
+    "1000": {
+      "verdict": "PASS",
+      "median_metrics": {
+        "cpu_p95_percent": 62.0,
+        "memory_per_user_bytes": 1010000,
+        "latency_p95_ms": 11.0,
+        "latency_p99_ms": 23.0,
+        "throughput_per_second": 990.0,
+        "error_rate": 0.0012
+      }
+    },
+    "2500": {
+      "verdict": "PASS",
+      "median_metrics": {
+        "cpu_p95_percent": 66.0,
+        "memory_per_user_bytes": 1050000,
+        "latency_p95_ms": 13.0,
+        "latency_p99_ms": 28.0,
+        "throughput_per_second": 2400.0,
+        "error_rate": 0.0016
+      }
+    },
+    "5000": {
+      "verdict": "PASS",
+      "median_metrics": {
+        "cpu_p95_percent": 70.0,
+        "memory_per_user_bytes": 1100000,
+        "latency_p95_ms": 16.0,
+        "latency_p99_ms": 34.0,
+        "throughput_per_second": 4700.0,
+        "error_rate": 0.002
+      }
+    }
+  }
+}

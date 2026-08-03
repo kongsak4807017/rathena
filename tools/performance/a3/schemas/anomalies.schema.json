@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rathena.local/tools/performance/a3/schemas/anomalies.schema.json",
+  "title": "A3 Anomaly Record",
+  "description": "Anomalies detected for one run, including metric-integrity failures and Prometheus/Linux cross-check disagreements. Anomalies must be resolved before baseline approval.",
+  "type": "object",
+  "required": [
+    "baseline_cycle_id",
+    "manifest_id",
+    "run_id",
+    "anomalies"
+  ],
+  "properties": {
+    "baseline_cycle_id": {"type": "string", "minLength": 1},
+    "manifest_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "anomalies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["category", "severity", "detected_utc", "description", "resolved"],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "COUNTER_RESET",
+              "TIMESTAMP_JUMP",
+              "SCRAPE_INTERVAL",
+              "DUPLICATE_SERIES",
+              "LABEL_CARDINALITY",
+              "PARTIAL_TEXTFILE_WRITE",
+              "METRIC_WRITE_ERROR",
+              "TIME_SYNC",
+              "CROSS_CHECK_DISAGREEMENT",
+              "SCALING_BREAKPOINT",
+              "THROUGHPUT_ANOMALY",
+              "OTHER"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["INFO", "WARNING", "CRITICAL"]
+          },
+          "detected_utc": {"type": "string", "format": "date-time"},
+          "metric": {"type": "string"},
+          "description": {"type": "string", "minLength": 1},
+          "evidence": {"type": "object"},
+          "resolved": {"type": "boolean"},
+          "resolution": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

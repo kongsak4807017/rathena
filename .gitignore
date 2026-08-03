@@ -152,3 +152,7 @@ Thumbs.db
 
 # generated files
 generated
+/artifacts/
+
+__pycache__/
+*.py[cod]

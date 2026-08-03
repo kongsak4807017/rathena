@@ -1,0 +1,23 @@
+{
+  "load_levels": [500, 1000, 2500, 5000],
+  "valid_runs_per_level": 3,
+  "webgl_clients": 20,
+  "preconditioning_seconds": 600,
+  "ramp_seconds": 300,
+  "steady_state_seconds": 1200,
+  "cooldown_seconds": 300,
+  "scrape_interval_seconds": 5,
+  "workload_mix_tolerance_percentage_points": 5,
+  "prometheus_missing_data_limit_seconds": 15,
+  "target_concurrency_floor_ratio": 0.98,
+  "workload_mix": {
+    "movement_direction_changes": 0.35,
+    "idle_heartbeat": 0.2,
+    "combat": 0.15,
+    "npc_interaction": 0.1,
+    "item_inventory": 0.08,
+    "map_change_warp": 0.05,
+    "chat": 0.04,
+    "login_logout_character_select": 0.03
+  }
+}

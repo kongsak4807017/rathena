@@ -1,0 +1,492 @@
+{
+  "panels": [
+    {
+      "targets": [],
+      "thresholds": [
+        {
+          "a3_threshold_ref": "errors.login_failure_max_ratio",
+          "value": 0.001
+        },
+        {
+          "a3_threshold_ref": "errors.login_failure_max_ratio",
+          "value": 0.0009000000000000001,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "errors.character_selection_failure_max_ratio",
+          "value": 0.001
+        },
+        {
+          "a3_threshold_ref": "errors.character_selection_failure_max_ratio",
+          "value": 0.0009000000000000001,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "errors.unexpected_steady_state_disconnect_max_ratio",
+          "value": 0.005
+        },
+        {
+          "a3_threshold_ref": "errors.unexpected_steady_state_disconnect_max_ratio",
+          "value": 0.0045000000000000005,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "errors.process_crash_max",
+          "value": 0
+        },
+        {
+          "a3_threshold_ref": "errors.data_corruption_max",
+          "value": 0
+        }
+      ],
+      "title": "A3 Overview",
+      "type": "timeseries"
+    },
+    {
+      "targets": [],
+      "thresholds": [
+        {
+          "a3_threshold_ref": "cpu.median_max_percent",
+          "value": 75
+        },
+        {
+          "a3_threshold_ref": "cpu.median_max_percent",
+          "value": 67.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "cpu.p95_max_percent",
+          "value": 85
+        },
+        {
+          "a3_threshold_ref": "cpu.p95_max_percent",
+          "value": 76.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "cpu.sustained_max_seconds",
+          "value": 30
+        },
+        {
+          "a3_threshold_ref": "cpu.sustained_max_seconds",
+          "value": 27.0,
+          "warning": true
+        }
+      ],
+      "title": "CPU",
+      "type": "timeseries"
+    },
+    {
+      "targets": [],
+      "thresholds": [
+        {
+          "a3_threshold_ref": "memory.total_rss_max_percent_of_ram",
+          "value": 80
+        },
+        {
+          "a3_threshold_ref": "memory.total_rss_max_percent_of_ram",
+          "value": 72.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "memory.steady_state_growth_max_percent",
+          "value": 5
+        },
+        {
+          "a3_threshold_ref": "memory.steady_state_growth_max_percent",
+          "value": 4.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "memory.swap_in_max",
+          "value": 0
+        },
+        {
+          "a3_threshold_ref": "memory.swap_out_max",
+          "value": 0
+        },
+        {
+          "a3_threshold_ref": "memory.oom_max",
+          "value": 0
+        },
+        {
+          "a3_threshold_ref": "memory.allocation_failure_max",
+          "value": 0
+        }
+      ],
+      "title": "Memory",
+      "type": "timeseries"
+    },
+    {
+      "targets": [],
+      "thresholds": [
+        {
+          "a3_threshold_ref": "tick_latency_ms.p50_max",
+          "value": 10
+        },
+        {
+          "a3_threshold_ref": "tick_latency_ms.p50_max",
+          "value": 9.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "tick_latency_ms.p95_max",
+          "value": 25
+        },
+        {
+          "a3_threshold_ref": "tick_latency_ms.p95_max",
+          "value": 22.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "tick_latency_ms.p99_max",
+          "value": 50
+        },
+        {
+          "a3_threshold_ref": "tick_latency_ms.p99_max",
+          "value": 45.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "tick_latency_ms.max_max",
+          "value": 100
+        },
+        {
+          "a3_threshold_ref": "tick_latency_ms.max_max",
+          "value": 90.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "tick_latency_ms.sustained_max_seconds",
+          "value": 10
+        },
+        {
+          "a3_threshold_ref": "tick_latency_ms.sustained_max_seconds",
+          "value": 9.0,
+          "warning": true
+        }
+      ],
+      "title": "Tick Latency",
+      "type": "timeseries"
+    },
+    {
+      "targets": [],
+      "thresholds": [
+        {
+          "a3_threshold_ref": "packet_processing_ms.p95_max",
+          "value": 5
+        },
+        {
+          "a3_threshold_ref": "packet_processing_ms.p95_max",
+          "value": 4.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "packet_processing_ms.p99_max",
+          "value": 10
+        },
+        {
+          "a3_threshold_ref": "packet_processing_ms.p99_max",
+          "value": 9.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "packet_processing_ms.max_max",
+          "value": 25
+        },
+        {
+          "a3_threshold_ref": "packet_processing_ms.max_max",
+          "value": 22.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "packet_processing_ms.backlog_growth_max_seconds",
+          "value": 10
+        },
+        {
+          "a3_threshold_ref": "packet_processing_ms.backlog_growth_max_seconds",
+          "value": 9.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "packet_processing_ms.dropped_or_rejected_max_ratio",
+          "value": 0.0001
+        },
+        {
+          "a3_threshold_ref": "packet_processing_ms.dropped_or_rejected_max_ratio",
+          "value": 9e-05,
+          "warning": true
+        }
+      ],
+      "title": "Packet Processing",
+      "type": "timeseries"
+    },
+    {
+      "targets": [],
+      "thresholds": [
+        {
+          "a3_threshold_ref": "sql_ms.p95_max",
+          "value": 25
+        },
+        {
+          "a3_threshold_ref": "sql_ms.p95_max",
+          "value": 22.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "sql_ms.p99_max",
+          "value": 75
+        },
+        {
+          "a3_threshold_ref": "sql_ms.p99_max",
+          "value": 67.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "sql_ms.max_max",
+          "value": 500
+        },
+        {
+          "a3_threshold_ref": "sql_ms.max_max",
+          "value": 450.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "sql_ms.slow_query_max_ratio",
+          "value": 0.005
+        },
+        {
+          "a3_threshold_ref": "sql_ms.slow_query_max_ratio",
+          "value": 0.0045000000000000005,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "sql_ms.execution_failure_max_ratio",
+          "value": 0.0001
+        },
+        {
+          "a3_threshold_ref": "sql_ms.execution_failure_max_ratio",
+          "value": 9e-05,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "sql_ms.connection_usage_p95_max_ratio_of_configured_max",
+          "value": 0.75
+        },
+        {
+          "a3_threshold_ref": "sql_ms.connection_usage_p95_max_ratio_of_configured_max",
+          "value": 0.675,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "sql_ms.connection_acquisition_failure_max",
+          "value": 0
+        },
+        {
+          "a3_threshold_ref": "sql_ms.deadlock_max",
+          "value": 0
+        },
+        {
+          "a3_threshold_ref": "sql_ms.lock_wait_timeout_max",
+          "value": 0
+        }
+      ],
+      "title": "SQL",
+      "type": "timeseries"
+    },
+    {
+      "targets": [],
+      "thresholds": [
+        {
+          "a3_threshold_ref": "script_ms.p95_max",
+          "value": 5
+        },
+        {
+          "a3_threshold_ref": "script_ms.p95_max",
+          "value": 4.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "script_ms.p99_max",
+          "value": 20
+        },
+        {
+          "a3_threshold_ref": "script_ms.p99_max",
+          "value": 18.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "script_ms.max_max",
+          "value": 100
+        },
+        {
+          "a3_threshold_ref": "script_ms.max_max",
+          "value": 90.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "script_ms.slow_script_max_ratio",
+          "value": 0.005
+        },
+        {
+          "a3_threshold_ref": "script_ms.slow_script_max_ratio",
+          "value": 0.0045000000000000005,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "script_ms.execution_failure_max_ratio",
+          "value": 0.0001
+        },
+        {
+          "a3_threshold_ref": "script_ms.execution_failure_max_ratio",
+          "value": 9e-05,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "script_ms.unknown_category_max_ratio",
+          "value": 0.05
+        },
+        {
+          "a3_threshold_ref": "script_ms.unknown_category_max_ratio",
+          "value": 0.045000000000000005,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "script_ms.category_latency_max_multiple_of_500_user_baseline",
+          "value": 2
+        },
+        {
+          "a3_threshold_ref": "script_ms.category_latency_max_multiple_of_500_user_baseline",
+          "value": 1.8,
+          "warning": true
+        }
+      ],
+      "title": "Script",
+      "type": "timeseries"
+    },
+    {
+      "targets": [],
+      "thresholds": [
+        {
+          "a3_threshold_ref": "storage.utilization_p95_max_percent",
+          "value": 75
+        },
+        {
+          "a3_threshold_ref": "storage.utilization_p95_max_percent",
+          "value": 67.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "storage.await_p95_max_ms",
+          "value": 5
+        },
+        {
+          "a3_threshold_ref": "storage.await_p95_max_ms",
+          "value": 4.5,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "storage.await_p99_max_ms",
+          "value": 10
+        },
+        {
+          "a3_threshold_ref": "storage.await_p99_max_ms",
+          "value": 9.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "storage.queue_depth_growth_max_seconds",
+          "value": 10
+        },
+        {
+          "a3_threshold_ref": "storage.queue_depth_growth_max_seconds",
+          "value": 9.0,
+          "warning": true
+        }
+      ],
+      "title": "Storage",
+      "type": "timeseries"
+    },
+    {
+      "targets": [],
+      "thresholds": [
+        {
+          "a3_threshold_ref": "network.utilization_p95_max_percent_of_1gbps",
+          "value": 70
+        },
+        {
+          "a3_threshold_ref": "network.utilization_p95_max_percent_of_1gbps",
+          "value": 63.0,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "network.packet_loss_max_ratio",
+          "value": 0.001
+        },
+        {
+          "a3_threshold_ref": "network.packet_loss_max_ratio",
+          "value": 0.0009000000000000001,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "network.tcp_retransmission_max_ratio",
+          "value": 0.001
+        },
+        {
+          "a3_threshold_ref": "network.tcp_retransmission_max_ratio",
+          "value": 0.0009000000000000001,
+          "warning": true
+        },
+        {
+          "a3_threshold_ref": "network.socket_error_max",
+          "value": 0
+        },
+        {
+          "a3_threshold_ref": "network.listen_drop_max",
+          "value": 0
+        }
+      ],
+      "title": "Network",
+      "type": "timeseries"
+    },
+    {
+      "targets": [],
+      "thresholds": [],
+      "title": "Scaling",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "a3",
+    "rathena",
+    "baseline"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "baseline_cycle_id",
+        "query": "${A3_BASELINE_CYCLE_ID}",
+        "type": "constant"
+      },
+      {
+        "name": "manifest_id",
+        "query": "${A3_MANIFEST_ID}",
+        "type": "constant"
+      },
+      {
+        "name": "run_id",
+        "query": "${A3_RUN_ID}",
+        "type": "constant"
+      },
+      {
+        "name": "load_level",
+        "query": "500,1000,2500,5000",
+        "type": "custom"
+      }
+    ]
+  },
+  "title": "A3 Baseline ${A3_BASELINE_CYCLE_ID}",
+  "uid": "a3-baseline",
+  "version": 1
+}

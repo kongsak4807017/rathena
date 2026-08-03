@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rathena.local/tools/performance/a3/schemas/run.schema.json",
+  "title": "A3 Run Record",
+  "description": "Metadata and lifecycle record for a single A3 run at one load level.",
+  "type": "object",
+  "required": [
+    "baseline_cycle_id",
+    "manifest_id",
+    "run_id",
+    "target_concurrency",
+    "actual_concurrency",
+    "webgl_clients",
+    "workload_seed",
+    "started_utc",
+    "ended_utc",
+    "phases",
+    "status",
+    "validity"
+  ],
+  "properties": {
+    "baseline_cycle_id": {"type": "string", "minLength": 1},
+    "manifest_id": {
+      "type": "string",
+      "pattern": "^a3-\\d{8}-[0-9a-f]{7,40}-ubuntu2404-8c16t-32g-\\d+$"
+    },
+    "run_id": {"type": "string", "minLength": 1},
+    "target_concurrency": {"type": "integer", "enum": [500, 1000, 2500, 5000]},
+    "actual_concurrency": {"type": "integer", "minimum": 0},
+    "webgl_clients": {"type": "integer", "const": 20},
+    "workload_seed": {"type": "integer"},
+    "started_utc": {"type": "string", "format": "date-time"},
+    "ended_utc": {"type": ["string", "null"], "format": "date-time"},
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["timestamp_utc", "previous_phase", "next_phase", "reason"],
+        "properties": {
+          "timestamp_utc": {"type": "string", "format": "date-time"},
+          "previous_phase": {
+            "type": ["string", "null"],
+            "enum": [
+              "ENVIRONMENT_CHECK",
+              "SERVICE_START",
+              "PRECONDITIONING",
+              "RAMP_UP",
+              "STEADY_STATE",
+              "COOL_DOWN",
+              "VALIDATION",
+              "REPORTING",
+              "ABORTED",
+              "ARTIFACT_CAPTURE",
+              "ROOT_CAUSE_ANALYSIS",
+              null
+            ]
+          },
+          "next_phase": {
+            "type": "string",
+            "enum": [
+              "ENVIRONMENT_CHECK",
+              "SERVICE_START",
+              "PRECONDITIONING",
+              "RAMP_UP",
+              "STEADY_STATE",
+              "COOL_DOWN",
+              "VALIDATION",
+              "REPORTING",
+              "ABORTED",
+              "ARTIFACT_CAPTURE",
+              "ROOT_CAUSE_ANALYSIS"
+            ]
+          },
+          "reason": {"type": "string"},
+          "command_result": {
+            "type": ["object", "null"],
+            "properties": {
+              "argv": {"type": "array", "items": {"type": "string"}},
+              "return_code": {"type": "integer"},
+              "elapsed_seconds": {"type": "number"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["PENDING", "RUNNING", "VALID", "INVALID", "ABORTED"]
+    },
+    "validity": {
+      "type": "object",
+      "required": ["valid", "reasons", "checked_gates", "run_id", "manifest_id"],
+      "properties": {
+        "valid": {"type": "boolean"},
+        "run_id": {"type": "string"},
+        "manifest_id": {"type": "string"},
+        "checked_gates": {"type": "array", "items": {"type": "string"}},
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["code", "field", "message", "observed", "expected", "severity"],
+            "properties": {
+              "code": {"type": "string"},
+              "field": {"type": "string"},
+              "message": {"type": "string"},
+              "observed": {},
+              "expected": {},
+              "severity": {"type": "string", "enum": ["error", "info"]}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

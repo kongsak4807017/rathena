@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rathena.local/tools/performance/a3/schemas/summary.schema.json",
+  "title": "A3 Run Summary",
+  "description": "Aggregated steady-state metrics for one run. Percentiles are computed from steady-state samples only.",
+  "type": "object",
+  "required": [
+    "baseline_cycle_id",
+    "manifest_id",
+    "run_id",
+    "target_concurrency",
+    "steady_state_samples",
+    "metrics"
+  ],
+  "properties": {
+    "baseline_cycle_id": {"type": "string", "minLength": 1},
+    "manifest_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "target_concurrency": {"type": "integer", "enum": [500, 1000, 2500, 5000]},
+    "steady_state_samples": {"type": "integer", "minimum": 1},
+    "metrics": {
+      "type": "object",
+      "required": [
+        "cpu_percent",
+        "memory",
+        "tick_latency_ms",
+        "packet_processing_ms",
+        "sql_ms",
+        "script_ms",
+        "errors",
+        "storage",
+        "network",
+        "workload_mix"
+      ],
+      "properties": {
+        "cpu_percent": {"$ref": "#/$defs/percentiles"},
+        "memory": {
+          "type": "object",
+          "required": ["total_rss_percent_of_ram", "steady_state_growth_percent", "swap_in", "swap_out", "oom", "allocation_failures", "per_user_bytes"],
+          "properties": {
+            "total_rss_percent_of_ram": {"type": "number"},
+            "steady_state_growth_percent": {"type": "number"},
+            "swap_in": {"type": "integer", "minimum": 0},
+            "swap_out": {"type": "integer", "minimum": 0},
+            "oom": {"type": "integer", "minimum": 0},
+            "allocation_failures": {"type": "integer", "minimum": 0},
+            "per_user_bytes": {"type": "number"}
+          },
+          "additionalProperties": false
+        },
+        "tick_latency_ms": {"$ref": "#/$defs/percentiles"},
+        "packet_processing_ms": {
+          "allOf": [
+            {"$ref": "#/$defs/percentiles"},
+            {
+              "type": "object",
+              "properties": {
+                "dropped_or_rejected_ratio": {"type": "number"},
+                "malformed_count": {"type": "integer", "minimum": 0},
+                "unknown_count": {"type": "integer", "minimum": 0}
+              }
+            }
+          ]
+        },
+        "sql_ms": {
+          "allOf": [
+            {"$ref": "#/$defs/percentiles"},
+            {
+              "type": "object",
+              "properties": {
+                "slow_query_ratio": {"type": "number"},
+                "execution_failure_ratio": {"type": "number"},
+                "connection_acquisition_failures": {"type": "integer", "minimum": 0},
+                "deadlocks": {"type": "integer", "minimum": 0},
+                "lock_wait_timeouts": {"type": "integer", "minimum": 0},
+                "connection_usage_p95_ratio_of_configured_max": {"type": "number"}
+              }
+            }
+          ]
+        },
+        "script_ms": {
+          "allOf": [
+            {"$ref": "#/$defs/percentiles"},
+            {
+              "type": "object",
+              "properties": {
+                "slow_script_ratio": {"type": "number"},
+                "execution_failure_ratio": {"type": "number"},
+                "unknown_category_ratio": {"type": "number"}
+              }
+            }
+          ]
+        },
+        "errors": {
+          "type": "object",
+          "required": ["process_crashes", "data_corruption", "deadlocks", "login_failure_ratio", "character_selection_failure_ratio", "unexpected_disconnect_ratio"],
+          "properties": {
+            "process_crashes": {"type": "integer", "minimum": 0},
+            "data_corruption": {"type": "integer", "minimum": 0},
+            "deadlocks": {"type": "integer", "minimum": 0},
+            "login_failure_ratio": {"type": "number"},
+            "character_selection_failure_ratio": {"type": "number"},
+            "unexpected_disconnect_ratio": {"type": "number"}
+          },
+          "additionalProperties": false
+        },
+        "storage": {
+          "type": "object",
+          "required": ["utilization_p95_percent", "await_p95_ms", "await_p99_ms"],
+          "properties": {
+            "utilization_p95_percent": {"type": "number"},
+            "await_p95_ms": {"type": "number"},
+            "await_p99_ms": {"type": "number"}
+          },
+          "additionalProperties": false
+        },
+        "network": {
+          "type": "object",
+          "required": ["utilization_p95_percent_of_1gbps", "packet_loss_ratio", "tcp_retransmission_ratio", "socket_errors", "listen_drops"],
+          "properties": {
+            "utilization_p95_percent_of_1gbps": {"type": "number"},
+            "packet_loss_ratio": {"type": "number"},
+            "tcp_retransmission_ratio": {"type": "number"},
+            "socket_errors": {"type": "integer", "minimum": 0},
+            "listen_drops": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        },
+        "workload_mix": {
+          "type": "object",
+          "required": [
+            "movement_direction_changes",
+            "idle_heartbeat",
+            "combat",
+            "npc_interaction",
+            "item_inventory",
+            "map_change_warp",
+            "chat",
+            "login_logout_character_select"
+          ],
+          "properties": {
+            "movement_direction_changes": {"type": "number"},
+            "idle_heartbeat": {"type": "number"},
+            "combat": {"type": "number"},
+            "npc_interaction": {"type": "number"},
+            "item_inventory": {"type": "number"},
+            "map_change_warp": {"type": "number"},
+            "chat": {"type": "number"},
+            "login_logout_character_select": {"type": "number"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "percentiles": {
+      "type": "object",
+      "required": ["p50", "p95", "p99", "max"],
+      "properties": {
+        "p50": {"type": "number"},
+        "p95": {"type": "number"},
+        "p99": {"type": "number"},
+        "max": {"type": "number"}
+      },
+      "additionalProperties": false
+    }
+  }
+}
