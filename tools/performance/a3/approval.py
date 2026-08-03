@@ -311,12 +311,21 @@ def _write_record_with_sidecar(
             ).get("state")
         except (OSError, ValueError):
             existing_state = None
-        if existing_state == ApprovalState.APPROVED.value:
+        if existing_state in (
+            ApprovalState.APPROVED.value,
+            ApprovalState.SUPERSEDED.value,
+        ):
             raise ApprovalError(
-                f"refusing to replace an existing APPROVED record: {destination}"
+                f"refusing to replace a finalized record ({existing_state}): {destination}"
             )
         if not overwrite:
             raise ApprovalError(f"approval record already exists: {destination}")
+    if sidecar.exists():
+        # A sidecar proves a finalized (or orphaned) checksum exists; never
+        # overwrite it, regardless of the retry flag.
+        raise ApprovalError(
+            f"refusing to overwrite an existing sidecar: {sidecar}"
+        )
     approval_dir.mkdir(parents=True, exist_ok=True)
     text = json.dumps(
         payload, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False
@@ -695,11 +704,12 @@ def supersede_baseline(
     )
     approval_dir = _approval_dir(artifact_root, new_cycle)
     _reject_symlink(approval_dir.parent, "cycle directory")
+    # Supersession records are append-only final records.
     _write_record_with_sidecar(
         approval_dir,
         "supersession.json",
         _supersession_to_dict(record),
         supersession_sha,
-        overwrite=True,
+        overwrite=False,
     )
     return record

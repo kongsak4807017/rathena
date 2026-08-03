@@ -726,7 +726,28 @@ class SupersessionTests(ApprovalTestBase):
             "2026-09-02T00:00:00Z",
         )
         one = supersede_baseline(self.artifact_root, *args)
-        two = supersede_baseline(self.artifact_root, *args)
+        # Append-only: a second write to the same location is rejected, so
+        # determinism is proven from a separate artifact root.
+        other_root = Path(self._tmp.name) / "root-det"
+        other_root.mkdir()
+        other_first = approve_baseline(
+            other_root, cycle_summary(), APPROVER, RATIONALE, UTC
+        )
+        other_second_cycle = cycle_summary(
+            baseline_cycle_id="cycle-2026-09",
+            manifest_id="a3-20260901-b2c3d4e-ubuntu2404-8c16t-32g-001",
+        )
+        other_second = approve_baseline(
+            other_root, other_second_cycle, APPROVER, RATIONALE, "2026-09-01T00:00:00Z"
+        )
+        two = supersede_baseline(
+            other_root,
+            self._record_payload(other_first),
+            self._record_payload(other_second),
+            APPROVER,
+            "Superseding with the September cycle.",
+            "2026-09-02T00:00:00Z",
+        )
         self.assertEqual(one, two)
 
 
@@ -755,6 +776,158 @@ class ImmutabilityTests(ApprovalTestBase):
             cycle, APPROVER, RATIONALE + " warning acknowledged", UTC
         )
         self.assertEqual(record.warnings, ("a warning", "b warning"))
+
+
+class SidecarCollisionTests(ApprovalTestBase):
+    def _orphan_sidecar(self, cycle, name, content=b"0" * 64 + b"  orphan.json\n"):
+        approval_dir = self.approval_dir(cycle)
+        approval_dir.mkdir(parents=True, exist_ok=True)
+        sidecar = approval_dir / name
+        sidecar.write_bytes(content)
+        return sidecar, content
+
+    def _assert_no_tmp(self, directory):
+        self.assertEqual(list(directory.rglob("*.tmp")), [])
+
+    def test_orphan_approved_sidecar_blocks_approval(self):
+        sidecar, content = self._orphan_sidecar(CYCLE, "approved-baseline.sha256")
+        with self.assertRaises(ApprovalError):
+            approve_baseline(
+                self.artifact_root, cycle_summary(), APPROVER, RATIONALE, UTC
+            )
+        self.assertEqual(sidecar.read_bytes(), content)
+        self.assertFalse((self.approval_dir() / "approved-baseline.json").exists())
+        self._assert_no_tmp(self.approval_dir())
+
+    def test_orphan_rejected_sidecar_blocks_rejection(self):
+        sidecar, content = self._orphan_sidecar(CYCLE, "rejected-baseline.sha256")
+        with self.assertRaises(ApprovalError):
+            reject_baseline(
+                self.artifact_root, cycle_summary(), APPROVER,
+                "Does not meet the bar.", UTC,
+            )
+        self.assertEqual(sidecar.read_bytes(), content)
+        self.assertFalse((self.approval_dir() / "rejected-baseline.json").exists())
+        self._assert_no_tmp(self.approval_dir())
+
+    def test_existing_sidecar_blocks_even_with_overwrite(self):
+        approval_dir = self.approval_dir()
+        approval_dir.mkdir(parents=True)
+        (approval_dir / "approved-baseline.json").write_text(
+            '{"state": "DRAFT"}\n', encoding="utf-8"
+        )
+        sidecar, content = self._orphan_sidecar(CYCLE, "approved-baseline.sha256")
+        with self.assertRaises(ApprovalError):
+            approve_baseline(
+                self.artifact_root, cycle_summary(), APPROVER, RATIONALE, UTC,
+                overwrite=True,
+            )
+        self.assertEqual(sidecar.read_bytes(), content)
+
+
+class SupersessionImmutabilityTests(ApprovalTestBase):
+    def _approvals(self):
+        first = approve_baseline(
+            self.artifact_root, cycle_summary(), APPROVER, RATIONALE, UTC
+        )
+        second_cycle = cycle_summary(
+            baseline_cycle_id="cycle-2026-09",
+            manifest_id="a3-20260901-b2c3d4e-ubuntu2404-8c16t-32g-001",
+        )
+        second = approve_baseline(
+            self.artifact_root, second_cycle, APPROVER, RATIONALE, "2026-09-01T00:00:00Z"
+        )
+        return first, second
+
+    def _payload(self, result):
+        return json.loads(result.approval_path.read_text(encoding="utf-8"))
+
+    def test_first_succeeds_second_rejected_bytes_unchanged(self):
+        first, second = self._approvals()
+        supersede_baseline(
+            self.artifact_root, self._payload(first), self._payload(second),
+            APPROVER, "Superseding with the September cycle.", "2026-09-02T00:00:00Z",
+        )
+        supersession_dir = self.approval_dir("cycle-2026-09")
+        json_path = supersession_dir / "supersession.json"
+        sha_path = supersession_dir / "supersession.sha256"
+        json_bytes = json_path.read_bytes()
+        sha_bytes = sha_path.read_bytes()
+        first_bytes = first.approval_path.read_bytes()
+        second_bytes = second.approval_path.read_bytes()
+
+        with self.assertRaises(ApprovalError):
+            supersede_baseline(
+                self.artifact_root, self._payload(first), self._payload(second),
+                APPROVER, "Superseding with the September cycle.", "2026-09-02T00:00:00Z",
+            )
+        with self.assertRaises(ApprovalError):
+            supersede_baseline(
+                self.artifact_root, self._payload(first), self._payload(second),
+                "Another Human", "Different rationale text here.", "2026-09-03T00:00:00Z",
+            )
+        self.assertEqual(json_path.read_bytes(), json_bytes)
+        self.assertEqual(sha_path.read_bytes(), sha_bytes)
+        self.assertEqual(first.approval_path.read_bytes(), first_bytes)
+        self.assertEqual(second.approval_path.read_bytes(), second_bytes)
+
+    def test_orphan_supersession_sidecar_blocks_supersession(self):
+        first, second = self._approvals()
+        supersession_dir = self.approval_dir("cycle-2026-09")
+        orphan = supersession_dir / "supersession.sha256"
+        content = b"f" * 64 + b"  supersession.json\n"
+        orphan.write_bytes(content)
+        with self.assertRaises(ApprovalError):
+            supersede_baseline(
+                self.artifact_root, self._payload(first), self._payload(second),
+                APPROVER, "Superseding with the September cycle.", "2026-09-02T00:00:00Z",
+            )
+        self.assertEqual(orphan.read_bytes(), content)
+        self.assertFalse((supersession_dir / "supersession.json").exists())
+
+
+class FinalizedRecordTests(ApprovalTestBase):
+    def test_overwrite_true_cannot_replace_finalized_superseded(self):
+        from tools.performance.a3 import approval as approval_module
+
+        approval_dir = self.approval_dir()
+        approval_dir.mkdir(parents=True)
+        destination = approval_dir / "approved-baseline.json"
+        destination.write_text('{"state": "SUPERSEDED"}\n', encoding="utf-8")
+        with self.assertRaises(ApprovalError):
+            approval_module._write_record_with_sidecar(
+                approval_dir,
+                "approved-baseline.json",
+                {"state": "APPROVED"},
+                "0" * 64,
+                overwrite=True,
+            )
+
+    def test_rejection_retry_of_non_finalized_output(self):
+        approval_dir = self.approval_dir()
+        approval_dir.mkdir(parents=True)
+        stale = approval_dir / "rejected-baseline.json"
+        stale.write_text('{"state": "DRAFT"}\n', encoding="utf-8")
+        result = reject_baseline(
+            self.artifact_root, cycle_summary(), APPROVER,
+            "Does not meet the bar.", UTC, overwrite=True,
+        )
+        self.assertTrue(result.written)
+        payload = json.loads(stale.read_text(encoding="utf-8"))
+        self.assertEqual(payload["state"], "REJECTED")
+
+    def test_malformed_destination_retry_deterministic(self):
+        approval_dir = self.approval_dir()
+        approval_dir.mkdir(parents=True)
+        stale = approval_dir / "approved-baseline.json"
+        stale.write_text("not json at all", encoding="utf-8")
+        result = approve_baseline(
+            self.artifact_root, cycle_summary(), APPROVER, RATIONALE, UTC,
+            overwrite=True,
+        )
+        self.assertTrue(result.written)
+        payload = json.loads(stale.read_text(encoding="utf-8"))
+        self.assertEqual(payload["state"], "APPROVED")
 
 
 class SchemaContractTests(ApprovalTestBase):
