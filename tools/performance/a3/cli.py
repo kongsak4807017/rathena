@@ -245,7 +245,9 @@ class CycleStateStore:
 class CLIDependencies:
     load_config: Optional[Callable] = None
     capture_manifest: Optional[Callable] = None
+    capture_runtime_manifest: Optional[Callable] = None
     verify_manifest: Optional[Callable] = None
+    load_slo_thresholds: Optional[Callable] = None
     build_dataset_plan: Optional[Callable] = None
     dataset_counts: Optional[Callable] = None
     emit_dataset_sql: Optional[Callable] = None
@@ -290,6 +292,7 @@ def default_dependencies(artifact_root: Path) -> CLIDependencies:
     from tools.performance.a3 import scaling as scaling_mod
     from tools.performance.a3 import slo as slo_mod
     from tools.performance.a3 import validity as validity_mod
+    from tools.performance.a3.io import read_json, write_json_atomic
 
     artifact_root = Path(artifact_root)
 
@@ -334,7 +337,11 @@ def default_dependencies(artifact_root: Path) -> CLIDependencies:
     return CLIDependencies(
         load_config=config_mod.load_config,
         capture_manifest=manifest_mod.capture_manifest,
+        capture_runtime_manifest=manifest_mod.capture_manifest,
         verify_manifest=manifest_mod.verify_manifest,
+        load_slo_thresholds=lambda: read_json(
+            Path(__file__).resolve().parent / "config" / "slo-thresholds.json"
+        ),
         build_dataset_plan=dataset_mod.build_dataset_plan,
         dataset_counts=_counts,
         emit_dataset_sql=dataset_mod.emit_dataset_sql,
@@ -597,11 +604,25 @@ def _cmd_prepare(args, deps: CLIDependencies) -> int:
     if store.exists(cycle):
         raise CLIError(EXIT_REFUSAL, f"cycle already prepared: {cycle}")
 
+    # Persist every required cycle input; cycle-state.json is written last.
+    # Any earlier failure must leave no finalized cycle state.
+    from tools.performance.a3.io import write_json_atomic
+
+    cycle_dir = Path(args.artifact_root) / "artifacts" / "performance" / "a3" / cycle
+    write_json_atomic(cycle_dir / "manifest.json", manifest)
+
+    dataset_path = cycle_dir / "dataset" / "a3-dataset.sql"
+    _require(deps.emit_dataset_sql, "emit_dataset_sql")(plan, dataset_path)
+
     rendered = _require(deps.render_prometheus_config, "render_prometheus_config")(cycle, cycle)
-    prometheus_path = (
-        Path(args.artifact_root) / "artifacts" / "performance" / "a3" / cycle / "prometheus.yml"
+    _atomic_write_bytes(cycle_dir / "prometheus.yml", rendered.encode("utf-8"))
+
+    template_path = Path(__file__).resolve().parent / "config" / "grafana-dashboard.json"
+    template = json.loads(template_path.read_text(encoding="utf-8"))
+    dashboard = _require(deps.render_dashboard, "render_dashboard")(
+        template, cycle, cycle, "cycle"
     )
-    _atomic_write_bytes(prometheus_path, rendered.encode("utf-8"))
+    write_json_atomic(cycle_dir / "grafana-dashboard.json", dashboard)
 
     state = CycleState(
         version=STATE_VERSION,
@@ -705,12 +726,6 @@ def _cmd_run(args, deps: CLIDependencies) -> int:
     if same_base:
         run_id = f"{base_id}-r{len(same_base) + 1}"
 
-    drift = _require(deps.verify_manifest, "verify_manifest")(
-        {"manifest_id": state.manifest_id}, {}
-    )
-    if drift:
-        raise CLIError(EXIT_REFUSAL, "runtime manifest drift detected")
-
     if args.dry_run:
         _print(
             deps,
@@ -736,9 +751,27 @@ def _cmd_run(args, deps: CLIDependencies) -> int:
         )
         return EXIT_OK
 
+    config = _require(deps.load_config, "load_config")(Path(state.config_path))
+    frozen_manifest = _require(deps.load_manifest, "load_manifest")(
+        state.baseline_cycle_id
+    )
+    if (
+        isinstance(frozen_manifest, Mapping)
+        and frozen_manifest.get("manifest_id") != state.manifest_id
+    ):
+        raise CLIError(EXIT_REFUSAL, "frozen manifest identity mismatch")
+    runtime_manifest = _require(deps.capture_runtime_manifest, "capture_runtime_manifest")(
+        Path("."), config
+    )
+    drift = _require(deps.verify_manifest, "verify_manifest")(
+        frozen_manifest, runtime_manifest
+    )
+    if drift:
+        raise CLIError(EXIT_REFUSAL, "runtime manifest drift detected")
+
     request = {
-        "config": None,
-        "manifest": {"manifest_id": state.manifest_id},
+        "config": config,
+        "manifest": frozen_manifest,
         "artifact_root": str(args.artifact_root),
         "baseline_cycle_id": state.baseline_cycle_id,
         "run_id": run_id,
@@ -747,17 +780,33 @@ def _cmd_run(args, deps: CLIDependencies) -> int:
     }
     controller = _require(deps.create_run_controller, "create_run_controller")(request)
 
+    from tools.performance.a3.collectors import RunContext
+    from tools.performance.a3.models import RunPhase
+
     controller.run_preflight()
     controller.run_service_start(())
     collectors = _require(deps.create_collector_controller, "create_collector_controller")(request)
-    collectors.start(request)
+    context = RunContext(
+        baseline_cycle_id=state.baseline_cycle_id,
+        manifest_id=state.manifest_id,
+        run_id=run_id,
+        artifact_root=Path(args.artifact_root),
+        phase=RunPhase.STEADY_STATE,
+    )
+    collectors.start(context)
     try:
         harness = _require(deps.run_harness, "run_harness")(request)
     except Exception as exc:
+        # Catastrophic operational failure: preserve evidence, then mark the
+        # cycle catastrophic only after preservation has completed.
         try:
             controller.abort(str(exc), catastrophic=True)
         finally:
             collectors.stop()
+        _write_state(
+            deps,
+            dataclasses.replace(state, catastrophic=True, last_error=str(exc)),
+        )
         raise CLIError(EXIT_OPERATIONAL, f"workload harness failed: {exc}") from None
     controller.run_preconditioning()
     controller.run_ramp_up()
@@ -768,17 +817,56 @@ def _cmd_run(args, deps: CLIDependencies) -> int:
     controller.run_reporting()
 
     validity = _require(deps.evaluate_validity, "evaluate_validity")(harness["run_data"])
-    slo_result = None
-    if validity.valid:
-        slo_result = _require(deps.evaluate_slos, "evaluate_slos")(validity, harness["metric_bundle"], None)
-    artifacts = _require(deps.write_run_artifacts, "write_run_artifacts")(
-        artifact_root=Path(args.artifact_root),
-        baseline_cycle_id=state.baseline_cycle_id,
-        run_id=run_id,
-        harness=harness,
-        validity=validity,
-        slo_result=slo_result,
+    thresholds = _require(deps.load_slo_thresholds, "load_slo_thresholds")()
+    slo_result = _require(deps.evaluate_slos, "evaluate_slos")(
+        validity, harness["metric_bundle"], thresholds
     )
+
+    final_phase = "REPORTING"
+    run_payload = {
+        "version": 1,
+        "baseline_cycle_id": state.baseline_cycle_id,
+        "run_id": run_id,
+        "manifest_id": state.manifest_id,
+        "load_level": args.users,
+        "run_number": args.run,
+        "validity": {
+            "valid": bool(validity.valid),
+            "reasons": [getattr(reason, "message", str(reason)) for reason in validity.reasons],
+        },
+        "final_phase": final_phase,
+        "artifact_status": "complete",
+        "created_utc": harness.get("created_utc"),
+    }
+    verdict = slo_result.status.value
+    summary_payload = {
+        "version": 1,
+        "run_id": run_id,
+        "manifest_id": state.manifest_id,
+        "load_level": args.users,
+        "verdict": verdict,
+        "valid": bool(validity.valid),
+        "median_metrics": harness.get("metrics", {}),
+        "worst_metrics": harness.get("worst_metrics", {}),
+        "warnings": [],
+        "failures": [],
+        "primary_bottleneck": None,
+    }
+    try:
+        artifacts = _require(deps.write_run_artifacts, "write_run_artifacts")(
+            artifact_root=Path(args.artifact_root),
+            baseline_cycle_id=state.baseline_cycle_id,
+            run_payload=run_payload,
+            summary_payload=summary_payload,
+            timeseries_rows=harness["timeseries_rows"],
+            workload_rows=harness["workload_rows"],
+            slo_result=slo_result,
+            anomalies=harness.get("anomalies", []),
+            prometheus_queries=harness["prometheus_queries"],
+            source_files=harness["source_files"],
+        )
+    except Exception as exc:
+        raise CLIError(EXIT_OPERATIONAL, f"run artifact write failed: {exc}") from None
 
     catastrophic = bool(harness.get("catastrophic")) or bool(
         slo_result is not None and slo_result.catastrophic_signals
@@ -841,6 +929,25 @@ def _cmd_evaluate(args, deps: CLIDependencies) -> int:
                 EXIT_REFUSAL,
                 f"level {level} has {_valid_runs_at(state, level)} valid runs; exactly three required",
             )
+
+    if args.dry_run:
+        _print(
+            deps,
+            {
+                "command": "evaluate",
+                "baseline_cycle_id": state.baseline_cycle_id,
+                "planned_levels": levels_present,
+                "operations": [
+                    "aggregate_level",
+                    "evaluate_scaling",
+                    "evaluate_regression",
+                    "derive_capacity",
+                    "transition CI_EVALUATED",
+                ],
+                "dry_run": True,
+            },
+        )
+        return EXIT_OK
 
     from tools.performance.a3.scaling import RunSummary
 
@@ -908,6 +1015,23 @@ def _cmd_report(args, deps: CLIDependencies) -> int:
     evaluation = state.controls.get("evaluation")
     if not isinstance(evaluation, Mapping):
         raise CLIError(EXIT_REFUSAL, "evaluation results missing from cycle state")
+
+    if args.dry_run:
+        _print(
+            deps,
+            {
+                "command": "report",
+                "baseline_cycle_id": state.baseline_cycle_id,
+                "planned_paths": {
+                    "technical_report": f"artifacts/performance/a3/{state.baseline_cycle_id}/technical-report.md",
+                    "executive_summary": f"artifacts/performance/a3/{state.baseline_cycle_id}/executive-summary.md",
+                    "comparison_csv": f"artifacts/performance/a3/{state.baseline_cycle_id}/comparison.csv",
+                    "artifact_index": f"artifacts/performance/a3/{state.baseline_cycle_id}/artifact-index.json",
+                },
+                "dry_run": True,
+            },
+        )
+        return EXIT_OK
 
     level_results = [_level_from_dict(item) for item in evaluation["levels"]]
     scaling = _scaling_from_dict(evaluation["scaling"])
@@ -1030,6 +1154,20 @@ def _cmd_approve(args, deps: CLIDependencies) -> int:
         raise CLIError(EXIT_REFUSAL, "cycle already approved")
     if state.state is not ApprovalState.AWAITING_APPROVAL or not state.reported or not state.evaluated:
         raise CLIError(EXIT_REFUSAL, "approval requires AWAITING_APPROVAL with a completed report")
+    if args.dry_run:
+        _print(
+            deps,
+            {
+                "command": "approve",
+                "baseline_cycle_id": state.baseline_cycle_id,
+                "approver_provided": bool(args.approver),
+                "rationale_provided": bool(args.rationale),
+                "approved_utc": args.approved_utc,
+                "planned_approval": f"artifacts/performance/a3/{state.baseline_cycle_id}/approval/approved-baseline.json",
+                "dry_run": True,
+            },
+        )
+        return EXIT_OK
     summary = _approval_summary(args, deps, state)
     result = _require(deps.approve_baseline, "approve_baseline")(
         artifact_root=Path(args.artifact_root),
@@ -1062,6 +1200,20 @@ def _cmd_reject(args, deps: CLIDependencies) -> int:
     state = _read_state(deps, args.cycle)
     if state.state is not ApprovalState.AWAITING_APPROVAL or not state.reported:
         raise CLIError(EXIT_REFUSAL, "rejection requires AWAITING_APPROVAL with a completed report")
+    if args.dry_run:
+        _print(
+            deps,
+            {
+                "command": "reject",
+                "baseline_cycle_id": state.baseline_cycle_id,
+                "approver_provided": bool(args.approver),
+                "rationale_provided": bool(args.rationale),
+                "rejected_utc": args.rejected_utc,
+                "planned_rejection": f"artifacts/performance/a3/{state.baseline_cycle_id}/approval/rejected-baseline.json",
+                "dry_run": True,
+            },
+        )
+        return EXIT_OK
     summary = _approval_summary(args, deps, state)
     result = _require(deps.reject_baseline, "reject_baseline")(
         artifact_root=Path(args.artifact_root),

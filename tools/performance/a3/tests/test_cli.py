@@ -113,7 +113,7 @@ def make_deps(root, calls=None, **overrides):
         return manifest()
 
     def fake_verify_manifest(expected, actual):
-        calls.record("verify_manifest")
+        calls.record("verify_manifest", (expected, actual))
         return []
 
     def fake_build_dataset_plan(seed):
@@ -153,13 +153,13 @@ def make_deps(root, calls=None, **overrides):
             def abort(self, reason, catastrophic):
                 calls.record("lifecycle.abort", reason)
 
-        calls.record("create_run_controller")
+        calls.record("create_run_controller", request)
         return Controller()
 
     def fake_collectors(request):
         class Collectors:
             def start(self, context):
-                calls.record("collectors.start")
+                calls.record("collectors.start", context)
 
             def stop(self):
                 calls.record("collectors.stop")
@@ -173,7 +173,21 @@ def make_deps(root, calls=None, **overrides):
             "run_data": {"run_id": request["run_id"]},
             "metric_bundle": {},
             "catastrophic": False,
-            "summary": {"verdict": "PASS"},
+            "metrics": {
+                "cpu_p95_percent": 60.0,
+                "memory_per_user_bytes": 1_000_000.0,
+                "latency_p95_ms": 10.0,
+                "latency_p99_ms": 20.0,
+                "throughput_per_second": float(request["load_level"]),
+                "error_rate": 0.001,
+            },
+            "worst_metrics": {},
+            "timeseries_rows": [],
+            "workload_rows": [],
+            "anomalies": [],
+            "prometheus_queries": {"start": 0, "end": 0, "step": 5, "queries": []},
+            "source_files": {},
+            "created_utc": "2026-08-02T20:00:00Z",
         }
 
     def fake_validity(run_data):
@@ -187,17 +201,19 @@ def make_deps(root, calls=None, **overrides):
         )
 
     def fake_slos(validity, bundle, thresholds):
-        calls.record("evaluate_slos")
+        calls.record("evaluate_slos", thresholds)
         return types.SimpleNamespace(catastrophic_signals=(), status=MetricVerdict.PASS)
 
     def fake_write_run_artifacts(**kwargs):
-        calls.record("write_run_artifacts", kwargs.get("baseline_cycle_id"))
+        calls.record("write_run_artifacts", kwargs)
         return {"complete": True}
 
     deps = CLIDependencies(
         load_config=fake_load_config,
         capture_manifest=fake_capture_manifest,
+        capture_runtime_manifest=lambda repo_root, config: calls.record("capture_runtime_manifest") or manifest(),
         verify_manifest=fake_verify_manifest,
+        load_slo_thresholds=lambda: calls.record("load_slo_thresholds") or {"warning_zone_ratio": 0.9},
         build_dataset_plan=fake_build_dataset_plan,
         dataset_counts=fake_dataset_counts,
         emit_dataset_sql=lambda plan, path: calls.record("emit_dataset_sql"),
@@ -520,6 +536,9 @@ class RunTests(CliTestBase):
         self.assertEqual(
             calls.names(),
             [
+                "load_config",
+                "load_manifest",
+                "capture_runtime_manifest",
                 "verify_manifest",
                 "create_run_controller",
                 "lifecycle.preflight",
@@ -535,6 +554,7 @@ class RunTests(CliTestBase):
                 "lifecycle.validation",
                 "lifecycle.reporting",
                 "evaluate_validity",
+                "load_slo_thresholds",
                 "evaluate_slos",
                 "write_run_artifacts",
             ],
@@ -554,6 +574,8 @@ class RunTests(CliTestBase):
         self.assertIn("collectors.stop", names)
         self.assertIn("lifecycle.abort", names)
         self.assertLess(names.index("run_harness"), names.index("collectors.stop"))
+        state = self.store().read(CYCLE)
+        self.assertTrue(state.catastrophic)
 
     def test_valid_fail_run_allows_continuation(self):
         self.write_state(controls=CONTROLS_DONE)
@@ -575,15 +597,20 @@ class RunTests(CliTestBase):
     def test_catastrophic_run_blocks_cycle(self):
         self.write_state(controls=CONTROLS_DONE)
         deps, calls, _ = make_deps(self.root)
-        deps = dataclasses.replace(
-            deps,
-            run_harness=lambda request: {
-                "run_data": {"run_id": request["run_id"]},
-                "metric_bundle": {},
-                "catastrophic": True,
-                "summary": {},
-            },
-        )
+        full = {
+            "run_data": {"run_id": "run-l500-n1"},
+            "metric_bundle": {},
+            "catastrophic": True,
+            "metrics": {},
+            "worst_metrics": {},
+            "timeseries_rows": [],
+            "workload_rows": [],
+            "anomalies": [],
+            "prometheus_queries": {"start": 0, "end": 0, "step": 5, "queries": []},
+            "source_files": {},
+            "created_utc": "2026-08-02T20:00:00Z",
+        }
+        deps = dataclasses.replace(deps, run_harness=lambda request: full)
         code = run_main(self._argv(), deps)
         self.assertEqual(code, EXIT_CATASTROPHIC)
         state = self.store().read(CYCLE)
@@ -599,7 +626,15 @@ class RunTests(CliTestBase):
         self.assertEqual(payload["users"], 500)
         self.assertEqual(payload["run_number"], 1)
         self.assertIn("phases", payload)
-        for forbidden in ("create_run_controller", "create_collectors", "run_harness", "write_run_artifacts"):
+        for forbidden in (
+            "create_run_controller",
+            "create_collectors",
+            "run_harness",
+            "write_run_artifacts",
+            "capture_runtime_manifest",
+            "verify_manifest",
+            "load_slo_thresholds",
+        ):
             self.assertNotIn(forbidden, calls.names())
         state = self.store().read(CYCLE)
         self.assertEqual(len(state.runs), 0)
@@ -1003,6 +1038,422 @@ class OutputTests(CliTestBase):
 
         self.assertTrue(callable(package.main))
         self.assertTrue(callable(package.build_parser))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class DryRunIsolationTests(CliTestBase):
+    def _file_tree(self):
+        return {
+            str(path.relative_to(self.root)): path.read_bytes()
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
+
+    def _evaluated_state(self):
+        runs = tuple(
+            run_entry(level, number)
+            for level in (500, 1000, 2500, 5000)
+            for number in (1, 2, 3)
+        )
+        self.write_state(controls=CONTROLS_DONE, runs=runs)
+        deps, _, _ = make_deps(self.root)
+        self.assertEqual(
+            run_main(["evaluate", "--cycle", CYCLE, "--artifact-root", str(self.root)], deps),
+            EXIT_OK,
+        )
+
+    def test_evaluate_dry_run_no_mutation(self):
+        runs = tuple(run_entry(500, n) for n in (1, 2, 3))
+        self.write_state(controls=CONTROLS_DONE, runs=runs)
+        before = self._file_tree()
+        deps, calls, outputs = make_deps(self.root)
+        code = run_main(
+            ["evaluate", "--cycle", CYCLE, "--artifact-root", str(self.root), "--dry-run"], deps
+        )
+        self.assertEqual(code, EXIT_OK)
+        payload = json.loads(outputs[0])
+        self.assertTrue(payload["dry_run"])
+        self.assertIn("planned_levels", payload)
+        for forbidden in (
+            "aggregate_level",
+            "evaluate_scaling",
+            "evaluate_regression",
+            "derive_capacity",
+        ):
+            self.assertNotIn(forbidden, calls.names())
+        self.assertEqual(self._file_tree(), before)
+
+    def test_report_dry_run_no_mutation(self):
+        self._evaluated_state()
+        before = self._file_tree()
+        writer = mock.Mock()
+        deps, calls, outputs = make_deps(self.root, write_cycle_reports=writer)
+        code = run_main(
+            ["report", "--cycle", CYCLE, "--artifact-root", str(self.root), "--dry-run"], deps
+        )
+        self.assertEqual(code, EXIT_OK)
+        writer.assert_not_called()
+        payload = json.loads(outputs[0])
+        self.assertTrue(payload["dry_run"])
+        self.assertIn("planned_paths", payload)
+        self.assertEqual(self._file_tree(), before)
+
+    def test_approve_dry_run_no_mutation_no_echo(self):
+        self._evaluated_state()
+        state = self.store().read(CYCLE)
+        self.store().write(
+            dataclasses.replace(state, state=ApprovalState.AWAITING_APPROVAL, reported=True)
+        )
+        before = self._file_tree()
+        approver = mock.Mock()
+        deps, calls, outputs = make_deps(self.root, approve_baseline=approver)
+        code = run_main(
+            [
+                "approve", "--cycle", CYCLE, "--approver", "J. Operator",
+                "--rationale", "Reviewed all artifacts thoroughly.",
+                "--approved-utc", UTC, "--artifact-root", str(self.root), "--dry-run",
+            ],
+            deps,
+        )
+        self.assertEqual(code, EXIT_OK)
+        approver.assert_not_called()
+        payload = json.loads(outputs[0])
+        self.assertTrue(payload["dry_run"])
+        self.assertNotIn("J. Operator", outputs[0])
+        self.assertNotIn("Reviewed all artifacts thoroughly.", outputs[0])
+        self.assertEqual(self._file_tree(), before)
+
+    def test_reject_dry_run_no_mutation(self):
+        self._evaluated_state()
+        state = self.store().read(CYCLE)
+        self.store().write(
+            dataclasses.replace(state, state=ApprovalState.AWAITING_APPROVAL, reported=True)
+        )
+        before = self._file_tree()
+        rejecter = mock.Mock()
+        deps, calls, outputs = make_deps(self.root, reject_baseline=rejecter)
+        code = run_main(
+            [
+                "reject", "--cycle", CYCLE, "--approver", "J. Operator",
+                "--rationale", "Does not meet the bar.",
+                "--rejected-utc", UTC, "--artifact-root", str(self.root), "--dry-run",
+            ],
+            deps,
+        )
+        self.assertEqual(code, EXIT_OK)
+        rejecter.assert_not_called()
+        payload = json.loads(outputs[0])
+        self.assertTrue(payload["dry_run"])
+        self.assertNotIn("J. Operator", outputs[0])
+        self.assertEqual(self._file_tree(), before)
+
+
+class PrepareIntegrationTests(CliTestBase):
+    FIXTURE_MANIFEST = (
+        Path(__file__).resolve().parent / "fixtures" / "valid_manifest.json"
+    )
+
+    def _deps_with_real_dataset(self, calls=None, **overrides):
+        from tools.performance.a3.dataset import build_dataset_plan, emit_dataset_sql
+
+        captured = json.loads(self.FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+        deps, calls, outputs = make_deps(
+            self.root,
+            calls=calls,
+            capture_manifest=lambda repo_root, config: captured,
+            build_dataset_plan=build_dataset_plan,
+            emit_dataset_sql=emit_dataset_sql,
+            **overrides,
+        )
+        return deps, calls, outputs, captured
+
+    def test_real_prepare_writes_all_artifacts(self):
+        from tools.performance.a3.config import load_config
+
+        from tools.performance.a3.cli import default_dependencies
+
+        real_renderers = default_dependencies(self.root)
+        deps, calls, outputs, captured = self._deps_with_real_dataset()
+        deps = dataclasses.replace(
+            deps,
+            load_config=load_config,
+            render_prometheus_config=real_renderers.render_prometheus_config,
+            render_dashboard=real_renderers.render_dashboard,
+        )
+        code = run_main(
+            [
+                "prepare",
+                "--config",
+                "tools/performance/a3/config/a3.example.json",
+                "--artifact-root",
+                str(self.root),
+            ],
+            deps,
+        )
+        self.assertEqual(code, EXIT_OK)
+        cycle_dir = self.root / "artifacts" / "performance" / "a3" / CYCLE
+        written_manifest = json.loads((cycle_dir / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(written_manifest, captured)
+        sql_path = cycle_dir / "dataset" / "a3-dataset.sql"
+        metadata_path = cycle_dir / "dataset" / "a3-dataset.sql.metadata.json"
+        self.assertTrue(sql_path.is_file())
+        self.assertTrue(metadata_path.is_file())
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        self.assertEqual(metadata["seed"], 20260802)
+        prometheus_text = (cycle_dir / "prometheus.yml").read_text(encoding="utf-8")
+        self.assertIn(CYCLE, prometheus_text)
+        self.assertNotIn("${A3_BASELINE_CYCLE_ID}", prometheus_text)
+        dashboard_text = (cycle_dir / "grafana-dashboard.json").read_text(encoding="utf-8")
+        self.assertNotIn("${A3_", dashboard_text)
+        self.assertTrue((cycle_dir / "cycle-state.json").is_file())
+        state = self.store().read(CYCLE)
+        self.assertIs(state.state, ApprovalState.DRAFT)
+        payload = json.loads(outputs[0])
+        self.assertEqual(payload.get("execution"), "not executed (planning only)")
+
+    def test_failure_before_state_write_leaves_no_state(self):
+        deps, calls, outputs, captured = self._deps_with_real_dataset()
+
+        def bad_emit(plan, path):
+            raise RuntimeError("disk full")
+
+        deps = dataclasses.replace(deps, emit_dataset_sql=bad_emit)
+        code = run_main(
+            ["prepare", "--config", "cfg.json", "--artifact-root", str(self.root)], deps
+        )
+        self.assertEqual(code, EXIT_INTERNAL)
+        cycle_dir = self.root / "artifacts" / "performance" / "a3" / CYCLE
+        self.assertFalse((cycle_dir / "cycle-state.json").exists())
+        self.assertEqual(list(self.root.rglob("*.tmp")), [])
+
+    def test_load_manifest_after_prepare(self):
+        deps, calls, outputs, captured = self._deps_with_real_dataset()
+        code = run_main(
+            ["prepare", "--config", "cfg.json", "--artifact-root", str(self.root)], deps
+        )
+        self.assertEqual(code, EXIT_OK)
+        from tools.performance.a3.cli import default_dependencies
+
+        real_deps = default_dependencies(self.root)
+        loaded = real_deps.load_manifest(CYCLE)
+        self.assertEqual(loaded, captured)
+
+
+class RunIntegrationTests(CliTestBase):
+    def _argv(self, users=500, run=1):
+        return [
+            "run", "--cycle", CYCLE, "--users", str(users), "--run", str(run),
+            "--artifact-root", str(self.root),
+        ]
+
+    def test_full_manifest_comparison(self):
+        self.write_state(controls=CONTROLS_DONE)
+        deps, calls, _ = make_deps(self.root)
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OK)
+        verify_calls = [payload for name, payload in calls.calls if name == "verify_manifest"]
+        self.assertEqual(len(verify_calls), 1)
+        expected, actual = verify_calls[0]
+        self.assertEqual(expected["manifest_id"], MANIFEST_ID)
+        self.assertEqual(actual["manifest_id"], MANIFEST_ID)
+        self.assertIn("capture_errors", expected)
+
+    def test_real_config_passed_to_controller(self):
+        self.write_state(controls=CONTROLS_DONE)
+        deps, calls, _ = make_deps(self.root)
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OK)
+        controller_calls = [
+            payload for name, payload in calls.calls if name == "create_run_controller"
+        ]
+        self.assertEqual(len(controller_calls), 1)
+        self.assertIsNotNone(controller_calls[0]["config"])
+
+    def test_thresholds_dict_passed_to_slo(self):
+        self.write_state(controls=CONTROLS_DONE)
+        deps, calls, _ = make_deps(self.root)
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OK)
+        slo_calls = [payload for name, payload in calls.calls if name == "evaluate_slos"]
+        self.assertEqual(len(slo_calls), 1)
+        self.assertEqual(slo_calls[0], {"warning_zone_ratio": 0.9})
+
+    def test_exact_task9_writer_kwargs(self):
+        self.write_state(controls=CONTROLS_DONE)
+        deps, calls, _ = make_deps(self.root)
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OK)
+        writer_calls = [
+            payload for name, payload in calls.calls if name == "write_run_artifacts"
+        ]
+        self.assertEqual(len(writer_calls), 1)
+        kwargs = writer_calls[0]
+        self.assertEqual(
+            set(kwargs),
+            {
+                "artifact_root",
+                "baseline_cycle_id",
+                "run_payload",
+                "summary_payload",
+                "timeseries_rows",
+                "workload_rows",
+                "slo_result",
+                "anomalies",
+                "prometheus_queries",
+                "source_files",
+            },
+        )
+        payload = kwargs["run_payload"]
+        for field in ("version", "baseline_cycle_id", "run_id", "manifest_id", "load_level", "run_number", "validity", "final_phase", "artifact_status", "created_utc"):
+            self.assertIn(field, payload)
+        summary = kwargs["summary_payload"]
+        for field in ("version", "run_id", "manifest_id", "load_level", "verdict", "valid"):
+            self.assertIn(field, summary)
+
+    def test_writer_failure_leaves_no_run_entry(self):
+        self.write_state(controls=CONTROLS_DONE)
+
+        def bad_writer(**kwargs):
+            raise RuntimeError("checksum failed")
+
+        deps, calls, _ = make_deps(self.root, write_run_artifacts=bad_writer)
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OPERATIONAL)
+        state = self.store().read(CYCLE)
+        self.assertEqual(len(state.runs), 0)
+
+    def test_full_stack_integration_no_signature_mismatch(self):
+        """Real Task 2/3/5/6/7/9 adapters + fake process/harness adapters."""
+        from tools.performance.a3.collectors import CollectorController, CollectorProcess
+        from tools.performance.a3.config import load_config as real_load_config
+        from tools.performance.a3.dataset import build_dataset_plan, emit_dataset_sql
+        from tools.performance.a3.manifest import verify_manifest as real_verify
+        from tools.performance.a3.reporting import write_run_artifacts as real_write
+        from tools.performance.a3.slo import evaluate_valid_run_slos
+        from tools.performance.a3.tests.test_collectors import FakeFactory
+        from tools.performance.a3.tests.test_slo import thresholds as slo_thresholds
+        from tools.performance.a3.tests.test_slo import valid_bundle
+        from tools.performance.a3.validity import validate_run as real_validate
+
+        fixture_dir = Path(__file__).resolve().parent / "fixtures"
+        fixture_manifest = json.loads((fixture_dir / "valid_manifest.json").read_text(encoding="utf-8"))
+        valid_run_data = json.loads((fixture_dir / "valid_run.json").read_text(encoding="utf-8"))
+
+        # Prepare with real dataset emission to seed the cycle.
+        deps, calls, outputs = make_deps(
+            self.root,
+            capture_manifest=lambda repo_root, config: fixture_manifest,
+            build_dataset_plan=build_dataset_plan,
+            emit_dataset_sql=emit_dataset_sql,
+        )
+        self.assertEqual(
+            run_main(
+                [
+                    "prepare",
+                    "--config",
+                    "tools/performance/a3/config/a3.example.json",
+                    "--artifact-root",
+                    str(self.root),
+                ],
+                deps,
+            ),
+            EXIT_OK,
+        )
+
+        # Controls via fakes.
+        runner = mock.Mock(return_value={"verdict": "PASS", "clients": 20})
+        deps = dataclasses.replace(deps, run_control=runner)
+        for name in ("idle", "webgl"):
+            self.assertEqual(
+                run_main(
+                    ["control", name, "--cycle", CYCLE, "--artifact-root", str(self.root)],
+                    deps,
+                ),
+                EXIT_OK,
+            )
+
+        # Run with real Task 5 controller (fake process factory), real
+        # validity/SLO/artifact writer, fake harness returning contract data.
+        raw_dir = self.root / "raw-integration"
+        from tools.performance.a3.tests.test_reporting import build_source_files
+
+        sources = build_source_files(raw_dir)
+        timeseries_row = {
+            "timestamp": 1000,
+            "phase": "STEADY_STATE",
+            "active_users": 500,
+            "cpu_percent": 50.0,
+            "memory_rss_bytes": 20_000_000_000,
+            "tick_latency_ms": 5.0,
+            "packet_processing_ms": 2.0,
+            "sql_latency_ms": 10.0,
+            "script_latency_ms": 2.0,
+            "storage_utilization_percent": 45.0,
+            "storage_await_ms": 2.0,
+            "network_utilization_percent": 40.0,
+        }
+        workload_row = {
+            "timestamp": 1000,
+            "phase": "STEADY_STATE",
+            "active_users": 500,
+            "category": "combat",
+            "event_count": 100,
+            "error_count": 0,
+        }
+
+        def harness(request):
+            return {
+                "run_data": valid_run_data,
+                "metric_bundle": valid_bundle(),
+                "catastrophic": False,
+                "metrics": {
+                    "cpu_p95_percent": 60.0,
+                    "memory_per_user_bytes": 1_000_000.0,
+                    "latency_p95_ms": 10.0,
+                    "latency_p99_ms": 20.0,
+                    "throughput_per_second": 500.0,
+                    "error_rate": 0.001,
+                },
+                "worst_metrics": {},
+                "timeseries_rows": [timeseries_row],
+                "workload_rows": [workload_row],
+                "anomalies": [],
+                "prometheus_queries": {"start": 1000, "end": 1010, "step": 5, "queries": []},
+                "source_files": sources,
+                "created_utc": "2026-08-02T20:00:00Z",
+            }
+
+        factory = FakeFactory()
+        deps = dataclasses.replace(
+            deps,
+            load_config=real_load_config,
+            verify_manifest=real_verify,
+            create_collector_controller=lambda request: CollectorController(
+                process_factory=factory
+            ),
+            run_harness=harness,
+            evaluate_validity=real_validate,
+            evaluate_slos=evaluate_valid_run_slos,
+            load_slo_thresholds=slo_thresholds,
+            write_run_artifacts=real_write,
+        )
+        code = run_main(
+            ["run", "--cycle", CYCLE, "--users", "500", "--run", "1", "--artifact-root", str(self.root)],
+            deps,
+        )
+        self.assertEqual(code, EXIT_OK)
+        run_dir = (
+            self.root / "artifacts" / "performance" / "a3" / CYCLE / "runs" / "run-l500-n1"
+        )
+        for name in ("run.json", "summary.json", "slo-verdict.json", "checksums.json"):
+            self.assertTrue((run_dir / name).is_file(), name)
+        state = self.store().read(CYCLE)
+        self.assertEqual(len(state.runs), 1)
+        self.assertTrue(state.runs[0]["valid"])
+        self.assertEqual(state.runs[0]["verdict"], "PASS")
 
 
 if __name__ == "__main__":
