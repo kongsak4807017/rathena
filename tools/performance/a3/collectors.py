@@ -147,11 +147,13 @@ def _minimal_environment(environ: Optional[Mapping[str, str]] = None) -> Dict[st
 def _popen_platform_kwargs(os_name: str) -> Dict[str, Any]:
     if os_name == "posix":
         return {"start_new_session": True, "close_fds": True}
-    kwargs: Dict[str, Any] = {"close_fds": True}
-    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", None)
-    if flags is not None:
-        kwargs["creationflags"] = flags
-    return kwargs
+    # CREATE_NEW_PROCESS_GROUP (0x200) is only defined on Windows; fall back
+    # to its literal value so behavior stays deterministic in tests running
+    # on any host platform.
+    return {
+        "close_fds": True,
+        "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200),
+    }
 
 
 def _default_process_factory(
