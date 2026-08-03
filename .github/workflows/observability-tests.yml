@@ -22,6 +22,9 @@ on:
       - ".github/workflows/observability-tests.yml"
       - "docs/observability/SQL_OBSERVABILITY_V1.md"
       - "docs/observability/SCRIPT_OBSERVABILITY_V1.md"
+      - "tools/performance/a3/**"
+      - "docs/observability/A3_*"
+      - ".github/workflows/a3-baseline-tests.yml"
   push:
     branches:
       - master
@@ -45,6 +48,9 @@ on:
       - ".github/workflows/observability-tests.yml"
       - "docs/observability/SQL_OBSERVABILITY_V1.md"
       - "docs/observability/SCRIPT_OBSERVABILITY_V1.md"
+      - "tools/performance/a3/**"
+      - "docs/observability/A3_*"
+      - ".github/workflows/a3-baseline-tests.yml"
 
 permissions:
   contents: read

@@ -1,0 +1,94 @@
+name: A3 baseline toolchain tests
+
+# Verifies the A3 baseline TOOLCHAIN only. This workflow never executes the
+# operational 500/1000/2500/5000-user baseline cycle and never approves a
+# baseline. Reference-host execution eligibility is validated separately on
+# the approved bare-metal host (see docs/observability/A3_BASELINE_RUNBOOK.md).
+
+on:
+  pull_request:
+    paths:
+      - "tools/performance/a3/**"
+      - "docs/observability/A3_*"
+      - ".github/workflows/a3-baseline-tests.yml"
+      - ".github/workflows/observability-tests.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "tools/performance/a3/**"
+      - "docs/observability/A3_*"
+      - ".github/workflows/a3-baseline-tests.yml"
+      - ".github/workflows/observability-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a3-baseline-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  a3-toolchain:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Print Python version
+        run: python --version
+
+      - name: Run A3 unit tests
+        run: python -m unittest discover -s tools/performance/a3/tests -v
+
+      - name: Run observability unit tests
+        run: python -m unittest discover -s tools/observability/tests -v
+
+      - name: Validate A3 JSON files
+        run: |
+          python -m json.tool tools/performance/a3/config/a3.example.json >/dev/null
+          python -m json.tool tools/performance/a3/config/slo-thresholds.json >/dev/null
+          python -m json.tool tools/performance/a3/config/workload-profile.json >/dev/null
+          python -m json.tool tools/performance/a3/config/grafana-dashboard.json >/dev/null
+
+      - name: Validate Python compilation
+        run: python -m compileall -q tools/performance/a3
+
+      - name: Deterministic non-operational CLI validation
+        run: |
+          set +e
+          python -m tools.performance.a3.cli prepare \
+            --config tools/performance/a3/config/a3.example.json \
+            --dry-run > stdout.txt 2> stderr.txt
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "TOOLCHAIN: prepare dry-run produced a complete plan."
+          elif [ "$code" -eq 3 ]; then
+            if ! grep -q "not eligible" stderr.txt; then
+              echo "FAIL: exit 3 without an eligibility refusal message."
+              exit 1
+            fi
+            echo "TOOLCHAIN OK: manifest capture is ineligible on this generic"
+            echo "runner (reference-host evidence required). This is NOT a"
+            echo "successful operational baseline preparation."
+          else
+            echo "FAIL: unexpected prepare dry-run exit code $code."
+            exit 1
+          fi
+          if [ -d artifacts ]; then
+            echo "FAIL: dry-run created an artifacts directory."
+            exit 1
+          fi
+          echo "TOOLCHAIN OK: no artifacts or state files were created."
+          echo "NOTE: reference-host execution eligibility remains a separate"
+          echo "gate on the approved bare-metal host."
