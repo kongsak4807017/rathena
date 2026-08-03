@@ -204,8 +204,30 @@ design.
 
 ## Catastrophic Stop Procedure
 
-On a catastrophic signal (crash, corruption, deadlock, OOM, restart,
-manifest drift, pipeline failure):
+Apply this procedure only for **confirmed catastrophic signals**, consistent
+with the CLI failure classification:
+
+- process crash or restart during a run
+- data corruption
+- deadlock
+- OOM
+- explicit harness/runtime `catastrophic=true` signal
+- explicit `CatastrophicRunError` or an equivalent confirmed adapter signal
+- catastrophic SLO signal
+
+The following are **not automatically catastrophic**; treat them as
+operational or governance failures (see the next section):
+
+- manifest ineligible
+- manifest drift detected before execution
+- missing binaries
+- ordinary harness setup/adapter failure
+- collector start failure
+- collector stop failure
+- ordinary lifecycle dependency failure
+- report or checksum generation failure
+
+On a confirmed catastrophic signal:
 
 1. Stop the cycle immediately; do not continue to higher levels.
 2. Preserve all available evidence (collectors, service logs, event log,
@@ -218,6 +240,35 @@ manifest drift, pipeline failure):
 
 Warm-cache procedure after a restart: restart services, perform the approved
 preconditioning, and do not clear the filesystem cache.
+
+## Operational and Governance Failure Procedure
+
+For failures that are not confirmed catastrophic signals:
+
+1. The command returns or refuses as an operational failure; the cycle is
+   **not** marked catastrophic automatically.
+2. Preserve any partial evidence that already exists.
+3. Correct the environment, configuration, or adapter.
+4. Retry only according to the run-identity and invalid-run preservation
+   rules (new replacement identity; never overwrite invalid-run evidence).
+5. Create a new manifest and restart the full cycle **only** when the frozen
+   environment actually changed (binary, configuration, kernel, PACKETVER,
+   dataset, governor, or exporter changed).
+
+### Exit-code interpretation
+
+| Exit code | Meaning | Operator action |
+| --- | --- | --- |
+| 0 | Command completed | Continue per runbook sequence |
+| 2 | Usage/input error | Fix command arguments |
+| 3 | Governance/state refusal | Fix preconditions or frozen-state conflict; not a crash |
+| 4 | Operational dependency or preservation failure | Investigate adapter/environment; **not automatically catastrophic** |
+| 5 | Confirmed catastrophic run preserved and cycle blocked | Follow the Catastrophic Stop Procedure |
+| 10 | Unexpected internal error | Report as a toolchain defect |
+
+Exit 4 is never, by itself, a catastrophic classification. Exit 5 requires
+both a confirmed catastrophic classification and completed artifact
+preservation plus the state transition.
 
 ## Evaluation
 
@@ -302,31 +353,38 @@ schemas, templates, indexes, and checksums.
   file, or tool). Fix the host, recapture, and do not execute with an
   ineligible manifest.
 - **Manifest drift**: a frozen field changed (binary, config, kernel,
-  PACKETVER, governor, dataset, exporter). Restore the frozen value or
-  create a new manifest and restart the cycle.
+  PACKETVER, governor, dataset, exporter). Drift detected before execution
+  is a governance refusal (exit 3), not a catastrophic event: restore the
+  frozen value, or create a new manifest and restart the cycle only because
+  the frozen environment actually changed.
 - **Missing binaries**: rebuild login/char/map-server in Release mode and
   recapture the manifest.
 - **Wrong PACKETVER**: correct `src/config/packets.hpp` or
   `src/custom/defines_pre.hpp` and recapture.
 - **Chrony/NTP unhealthy**: restart chrony, confirm `chronyc sources`
   shows a selected source, and rerun preflight.
-- **Collector start failure**: install sysstat tools, verify
-  pidstat/sar/vmstat/iostat run manually, and retry.
-- **Collector stop failure**: investigate the stuck process, stop it
-  manually, preserve its partial log, and treat the run as invalid.
+- **Collector start failure**: operational failure (exit 4), not
+  catastrophic. Install sysstat tools, verify pidstat/sar/vmstat/iostat run
+  manually, and retry the run under a new replacement identity if needed.
+- **Collector stop failure**: operational failure (exit 4), not
+  catastrophic. Investigate the stuck process, stop it manually, preserve
+  its partial log, and treat the run as invalid.
 - **Missing source logs**: do not fabricate files; the run cannot be
   finalized. Preserve what exists and mark the run invalid.
 - **Invalid run**: preserve artifacts and start a replacement with a new
   identity.
 - **Fewer than three valid runs**: complete more valid runs at that level;
   evaluation refuses incomplete levels.
-- **Report checksum failure**: do not approve. Regenerate the report from
-  preserved run artifacts and re-verify.
+- **Report checksum failure**: operational failure (exit 4), not
+  catastrophic. Do not approve. Regenerate the report from preserved run
+  artifacts and re-verify.
 - **Approval refusal**: check capacity verdict, safe capacity, CI status,
   rationale wording (warnings must be acknowledged for PASS_WITH_WARNING),
   and identifier/UTC rules.
 - **Catastrophic cycle**: follow the Catastrophic Stop Procedure; the cycle
-  cannot continue or be evaluated normally.
+  cannot continue or be evaluated normally. Confirm the signal is one of
+  the confirmed catastrophic signals above before treating the cycle as
+  catastrophic.
 - **GitHub CI dry-run returns exit 3 on a generic runner**: expected. The
   generic runner is not the reference host, so manifest capture is
   ineligible. CI verifies the toolchain only; no files are written and no
