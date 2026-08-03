@@ -442,7 +442,17 @@ def evaluate_regression(
     current: Sequence[LevelAggregation],
     previous: dict,
 ) -> RegressionResult:
-    """Compare current level medians with the previous approved baseline."""
+    """Compare current medians with an approved baseline when one exists."""
+    if previous == {"status": "NO_PREVIOUS_BASELINE"}:
+        absolute_slo_ok = all(
+            level.verdict not in (MetricVerdict.FAIL, MetricVerdict.BLOCKED)
+            for level in current
+        )
+        return RegressionResult(
+            passed=absolute_slo_ok,
+            checks=(),
+            compared_levels=(),
+        )
     defects = _validate_previous_baseline(previous)
     checks: List[RegressionCheck] = []
     compared: List[int] = []

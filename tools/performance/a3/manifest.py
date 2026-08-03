@@ -767,9 +767,10 @@ def verify_manifest(expected: Dict[str, Any], actual: Dict[str, Any]) -> List[st
 
     Returns one sorted, deterministic dotted-path message per changed leaf
     (``<path> changed``), missing key (``<path> missing``) or unexpected key
-    (``<path> unexpected``). Only the top-level ``manifest_sha256`` field is
-    ignored; ``manifest_id``, ``capture_errors`` and
-    ``eligible_for_execution`` are compared.
+    (``<path> unexpected``). Top-level capture metadata (``created_utc`` and
+    ``manifest_sha256``) is ignored; ``manifest_id``, ``capture_errors`` and
+    ``eligible_for_execution`` are compared so environment-bearing fields
+    remain frozen.
     """
     differences: List[str] = []
     _compare(expected, actual, "", differences)
@@ -780,14 +781,14 @@ def _compare(expected: Any, actual: Any, path: str, out: List[str]) -> None:
     if isinstance(expected, dict) and isinstance(actual, dict):
         for key in expected:
             child = f"{path}.{key}" if path else key
-            if not path and key == "manifest_sha256":
+            if not path and key in {"created_utc", "manifest_sha256"}:
                 continue
             if key not in actual:
                 out.append(f"{child} missing")
             else:
                 _compare(expected[key], actual[key], child, out)
         for key in actual:
-            if not path and key == "manifest_sha256":
+            if not path and key in {"created_utc", "manifest_sha256"}:
                 continue
             if key not in expected:
                 child = f"{path}.{key}" if path else key

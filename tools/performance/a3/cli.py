@@ -256,6 +256,8 @@ class CLIDependencies:
     run_harness: Optional[Callable] = None
     run_control: Optional[Callable] = None
     evaluate_validity: Optional[Callable] = None
+    validate_metric_integrity: Optional[Callable] = None
+    combine_validity_results: Optional[Callable] = None
     evaluate_slos: Optional[Callable] = None
     aggregate_level: Optional[Callable] = None
     evaluate_scaling: Optional[Callable] = None
@@ -334,6 +336,34 @@ def default_dependencies(artifact_root: Path) -> CLIDependencies:
     def _render_dashboard(template, cycle, manifest_id, run_id):
         return reporting_mod.render_dashboard_runtime(template, cycle, manifest_id, run_id)
 
+    def _load_previous_baseline():
+        base = artifact_root / "artifacts" / "performance" / "a3"
+        candidates = []
+        if base.is_dir():
+            for approved_path in base.glob("*/approval/approved-baseline.json"):
+                try:
+                    approved = read_json(approved_path)
+                    state_payload = read_json(approved_path.parents[1] / "cycle-state.json")
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+                evaluation = state_payload.get("controls", {}).get("evaluation", {})
+                levels = evaluation.get("levels")
+                if approved.get("state") != "APPROVED" or not isinstance(levels, list):
+                    continue
+                candidates.append((approved.get("approved_utc", ""), approved, levels))
+        if not candidates:
+            return {"status": "NO_PREVIOUS_BASELINE"}
+        _, approved, levels = max(candidates, key=lambda item: (item[0], item[1]["baseline_cycle_id"]))
+        return {
+            "version": 1,
+            "approval_state": "APPROVED",
+            "manifest_id": approved["manifest_id"],
+            "levels": {
+                str(item["load_level"]): {"median_metrics": item["median_metrics"]}
+                for item in levels
+            },
+        }
+
     return CLIDependencies(
         load_config=config_mod.load_config,
         capture_manifest=manifest_mod.capture_manifest,
@@ -350,12 +380,14 @@ def default_dependencies(artifact_root: Path) -> CLIDependencies:
         run_harness=_not_configured("run_harness"),
         run_control=_not_configured("run_control"),
         evaluate_validity=validity_mod.validate_run,
+        validate_metric_integrity=validity_mod.validate_metric_integrity,
+        combine_validity_results=validity_mod.combine_validity_results,
         evaluate_slos=slo_mod.evaluate_valid_run_slos,
         aggregate_level=scaling_mod.aggregate_level,
         evaluate_scaling=scaling_mod.evaluate_scaling,
         evaluate_regression=scaling_mod.evaluate_regression,
         derive_capacity=scaling_mod.derive_capacity,
-        load_previous_baseline=lambda: None,
+        load_previous_baseline=_load_previous_baseline,
         load_manifest=lambda manifest_id: _missing_manifest(artifact_root, manifest_id),
         write_run_artifacts=reporting_mod.write_run_artifacts,
         write_cycle_reports=reporting_mod.write_cycle_reports,
@@ -850,7 +882,19 @@ def _cmd_run(args, deps: CLIDependencies) -> int:
     try:
         controller.run_validation()
         controller.run_reporting()
-        validity = _require(deps.evaluate_validity, "evaluate_validity")(harness["run_data"])
+        run_validity = _require(deps.evaluate_validity, "evaluate_validity")(harness["run_data"])
+        query_window = harness["prometheus_queries"]
+        metric_validity = _require(
+            deps.validate_metric_integrity, "validate_metric_integrity"
+        )(
+            tuple(harness.get("prometheus_series", ())),
+            query_window["start"],
+            query_window["end"],
+            step=query_window["step"],
+        )
+        validity = _require(
+            deps.combine_validity_results, "combine_validity_results"
+        )(run_validity, metric_validity)
         thresholds = _require(deps.load_slo_thresholds, "load_slo_thresholds")()
         slo_result = _require(deps.evaluate_slos, "evaluate_slos")(
             validity, harness["metric_bundle"], thresholds
@@ -1113,10 +1157,21 @@ def _cmd_evaluate(args, deps: CLIDependencies) -> int:
     regression = _require(deps.evaluate_regression, "evaluate_regression")(aggregations, previous)
     capacity = _require(deps.derive_capacity, "derive_capacity")(aggregations)
 
+    regression_payload = _regression_to_dict(regression)
+    regression_payload["status"] = (
+        "NOT_APPLICABLE"
+        if previous == {"status": "NO_PREVIOUS_BASELINE"}
+        else ("PASS" if regression.passed else "FAIL")
+    )
+    regression_payload["reason"] = (
+        "no previous approved baseline"
+        if previous == {"status": "NO_PREVIOUS_BASELINE"}
+        else None
+    )
     evaluation = {
         "levels": [_level_to_dict(level) for level in aggregations],
         "scaling": _scaling_to_dict(scaling),
-        "regression": _regression_to_dict(regression),
+        "regression": regression_payload,
         "capacity": _capacity_to_dict(capacity),
     }
     controls = dict(state.controls)
@@ -1143,6 +1198,50 @@ def _cmd_evaluate(args, deps: CLIDependencies) -> int:
         },
     )
     return EXIT_OK
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validated_run_checksums(
+    artifact_root: Path, state: CycleState
+) -> Tuple[Dict[str, str], Dict[str, int]]:
+    cycle_dir = artifact_root / "artifacts" / "performance" / "a3" / state.baseline_cycle_id
+    hashes: Dict[str, str] = {}
+    numbers: Dict[str, int] = {}
+    for entry in sorted(state.runs, key=lambda item: item["run_id"]):
+        run_id = entry["run_id"]
+        checksum_path = cycle_dir / "runs" / run_id / "checksums.json"
+        if not checksum_path.is_file():
+            raise CLIError(EXIT_OPERATIONAL, f"run checksums missing: {run_id}")
+        try:
+            payload = json.loads(checksum_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CLIError(EXIT_OPERATIONAL, f"run checksums invalid for {run_id}: {exc}") from None
+        if payload.get("run_id") != run_id or not isinstance(payload.get("files"), list):
+            raise CLIError(EXIT_OPERATIONAL, f"run checksums identity mismatch: {run_id}")
+        run_dir = checksum_path.parent
+        for file_entry in payload["files"]:
+            if not isinstance(file_entry, Mapping):
+                raise CLIError(EXIT_OPERATIONAL, f"run checksums malformed: {run_id}")
+            relative = file_entry.get("path")
+            expected = file_entry.get("sha256")
+            if not isinstance(relative, str) or not isinstance(expected, str):
+                raise CLIError(EXIT_OPERATIONAL, f"run checksums malformed: {run_id}")
+            relative_path = Path(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise CLIError(EXIT_OPERATIONAL, f"run checksums unsafe path: {run_id}")
+            target = run_dir / relative_path
+            if not target.is_file() or _sha256_path(target) != expected:
+                raise CLIError(EXIT_OPERATIONAL, f"run checksum mismatch: {run_id}/{relative}")
+        hashes[run_id] = _sha256_path(checksum_path)
+        numbers[run_id] = int(entry["run_number"])
+    return hashes, numbers
 
 
 def _cmd_report(args, deps: CLIDependencies) -> int:
@@ -1183,12 +1282,13 @@ def _cmd_report(args, deps: CLIDependencies) -> int:
         if not check.passed and check.metric:
             bottleneck = check.metric
             break
+    run_checksums, run_numbers = _validated_run_checksums(Path(args.artifact_root), state)
     report_controls = {
         "idle": dict(state.controls.get("idle", {})),
         "webgl": dict(state.controls.get("webgl", {})),
         "primary_bottleneck": bottleneck,
-        "run_checksums": {},
-        "run_numbers": {},
+        "run_checksums": run_checksums,
+        "run_numbers": run_numbers,
         "dashboard_run_id": state.runs[0]["run_id"] if state.runs else "cycle",
     }
     result = _require(deps.write_cycle_reports, "write_cycle_reports")(
@@ -1251,6 +1351,21 @@ def _approval_summary(args, deps: CLIDependencies, state: CycleState) -> Dict[st
     else:
         evaluation = controls.get("evaluation", {})
         capacity = evaluation.get("capacity", {})
+        warning_candidates: List[str] = []
+        for item in evaluation.get("levels", []):
+            warning_candidates.extend(str(value) for value in item.get("warnings", []))
+        warning_candidates.extend(
+            str(check.get("message"))
+            for check in evaluation.get("scaling", {}).get("checks", [])
+            if check.get("message") and not check.get("passed", True)
+        )
+        warning_candidates.extend(
+            str(check.get("message"))
+            for check in evaluation.get("regression", {}).get("checks", [])
+            if check.get("message") and not check.get("passed", True)
+        )
+        warning_candidates.extend(str(value) for value in capacity.get("notes", []))
+        warnings = sorted({value for value in warning_candidates if value})
         summary = {
             "capacity": {
                 "verdict": capacity.get("verdict"),
@@ -1264,7 +1379,7 @@ def _approval_summary(args, deps: CLIDependencies, state: CycleState) -> Dict[st
                 str(item["load_level"]): {"verdict": item["verdict"]}
                 for item in evaluation.get("levels", [])
             },
-            "warnings": [],
+            "warnings": warnings,
             "git_sha": controls.get("git_sha"),
             "report_checksums_sha256": None,
         }

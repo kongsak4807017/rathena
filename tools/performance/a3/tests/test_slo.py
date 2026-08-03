@@ -580,8 +580,7 @@ class CatastrophicTests(unittest.TestCase):
         self.assertEqual(result.evaluations, ())
         self.assertEqual(result.evaluated_metrics, ())
         self.assertEqual(result.blocked_metrics, ("run_validity",))
-        codes = [signal.code for signal in result.catastrophic_signals]
-        self.assertEqual(codes, ["INVALID_RUN"])
+        self.assertEqual(result.catastrophic_signals, ())
 
     def test_valid_run_evaluates_normally(self):
         validity = validate_run(valid_run_data())

@@ -360,6 +360,15 @@ class RegressionTests(unittest.TestCase):
         medians[level][metric] = value
         return medians
 
+    def test_first_baseline_is_not_applicable_without_fabricated_checks(self):
+        result = evaluate_regression(
+            self._current(self.pass_medians),
+            {"status": "NO_PREVIOUS_BASELINE"},
+        )
+        self.assertTrue(result.passed)
+        self.assertEqual(result.checks, ())
+        self.assertEqual(result.compared_levels, ())
+
     def test_all_budgets_pass(self):
         result = self._evaluate()
         self.assertTrue(result.passed)

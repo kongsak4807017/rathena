@@ -228,6 +228,13 @@ class DeterminismTests(unittest.TestCase):
             ],
         )
 
+    def test_capture_timestamps_do_not_create_runtime_drift(self):
+        expected = load_fixture()
+        actual = copy.deepcopy(expected)
+        actual["created_utc"] = "2026-08-03T20:00:00Z"
+        actual["manifest_sha256"] = "0" * 64
+        self.assertEqual(verify_manifest(expected, actual), [])
+
     def test_manifest_id_is_stable_for_identical_canonical_content(self):
         fixture = load_fixture()
         self.assertEqual(manifest_id(fixture), fixture["manifest_id"])

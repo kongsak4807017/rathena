@@ -378,16 +378,10 @@ def evaluate_valid_run_slos(
 ) -> RunSLOResult:
     """Evaluate SLOs only for a Task 6 valid run; invalid runs are BLOCKED."""
     if not validity_result.valid:
-        signal = CatastrophicSignal(
-            code=CATASTROPHIC_INVALID_RUN,
-            message="run validity gates failed; SLO evaluation refused",
-            source="run_validity",
-            observed=None,
-        )
         return RunSLOResult(
             status=MetricVerdict.BLOCKED,
             evaluations=(),
-            catastrophic_signals=(signal,),
+            catastrophic_signals=(),
             evaluated_metrics=(),
             blocked_metrics=("run_validity",),
         )

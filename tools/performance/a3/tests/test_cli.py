@@ -1,6 +1,7 @@
 """Tests for the A3 orchestration CLI (prepare/control/run/evaluate/report/approve)."""
 
 import dataclasses
+import hashlib
 import json
 import tempfile
 import types
@@ -200,6 +201,14 @@ def make_deps(root, calls=None, **overrides):
             manifest_id=MANIFEST_ID,
         )
 
+    def fake_metric_integrity(series_set, start, end, step=5):
+        calls.record("validate_metric_integrity", (series_set, start, end, step))
+        return types.SimpleNamespace(valid=True, issues=())
+
+    def fake_combine_validity(run_result, metric_result):
+        calls.record("combine_validity_results")
+        return run_result
+
     def fake_slos(validity, bundle, thresholds):
         calls.record("evaluate_slos", thresholds)
         return types.SimpleNamespace(catastrophic_signals=(), status=MetricVerdict.PASS)
@@ -221,6 +230,8 @@ def make_deps(root, calls=None, **overrides):
         create_collector_controller=fake_collectors,
         run_harness=fake_harness,
         evaluate_validity=fake_validity,
+        validate_metric_integrity=fake_metric_integrity,
+        combine_validity_results=fake_combine_validity,
         evaluate_slos=fake_slos,
         aggregate_level=lambda runs: calls.record("aggregate_level", len(runs)) or _level(runs[0].load_level if runs else 500),
         evaluate_scaling=lambda levels: calls.record("evaluate_scaling") or ScalingResult(True, (), None),
@@ -667,6 +678,8 @@ class RunTests(CliTestBase):
                 "lifecycle.validation",
                 "lifecycle.reporting",
                 "evaluate_validity",
+                "validate_metric_integrity",
+                "combine_validity_results",
                 "load_slo_thresholds",
                 "evaluate_slos",
                 "write_run_artifacts",
@@ -863,6 +876,22 @@ class ReportTests(CliTestBase):
         deps, _, _ = make_deps(self.root)
         code = run_main(["evaluate", "--cycle", CYCLE, "--artifact-root", str(self.root)], deps)
         self.assertEqual(code, EXIT_OK)
+        cycle_dir = self.root / "artifacts" / "performance" / "a3" / CYCLE
+        for entry in runs:
+            run_dir = cycle_dir / "runs" / entry["run_id"]
+            run_dir.mkdir(parents=True, exist_ok=True)
+            evidence = run_dir / "run.json"
+            evidence.write_text("{}\n", encoding="utf-8")
+            digest = hashlib.sha256(evidence.read_bytes()).hexdigest()
+            (run_dir / "checksums.json").write_text(
+                json.dumps({
+                    "version": 1,
+                    "baseline_cycle_id": CYCLE,
+                    "run_id": entry["run_id"],
+                    "files": [{"path": "run.json", "sha256": digest, "size_bytes": 3}],
+                }, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
 
     def test_evaluate_required(self):
         self.write_state(controls=CONTROLS_DONE)
@@ -893,6 +922,25 @@ class ReportTests(CliTestBase):
             self.assertIn(key, payload)
         cycle_dir = self.root / "artifacts" / "performance" / "a3" / CYCLE
         self.assertTrue((cycle_dir / "checksums.json").is_file())
+        index = json.loads((cycle_dir / "artifact-index.json").read_text(encoding="utf-8"))
+        self.assertTrue(index["runs"])
+        self.assertTrue(all(run["checksums_sha256"] for run in index["runs"]))
+
+    def test_tampered_run_evidence_rejected_before_report(self):
+        from tools.performance.a3.reporting import write_cycle_reports
+
+        self._evaluated_state()
+        state = self.store().read(CYCLE)
+        run_id = state.runs[0]["run_id"]
+        evidence = (
+            self.root / "artifacts" / "performance" / "a3" / CYCLE
+            / "runs" / run_id / "run.json"
+        )
+        evidence.write_text('{"tampered":true}\n', encoding="utf-8")
+        deps, _, _ = make_deps(self.root, write_cycle_reports=write_cycle_reports)
+        code = run_main(self._argv(), deps)
+        self.assertEqual(code, EXIT_OPERATIONAL)
+        self.assertIs(self.store().read(CYCLE).state, ApprovalState.CI_EVALUATED)
 
     def test_repeat_report_refused(self):
         from tools.performance.a3.reporting import write_cycle_reports
@@ -968,6 +1016,30 @@ class ApprovalTests(CliTestBase):
         state = self.store().read(CYCLE)
         self.assertTrue(state.approved)
         self.assertIs(state.state, ApprovalState.APPROVED)
+
+    def test_warning_approval_summary_is_nonempty_and_deduplicated(self):
+        evaluation = {
+            "levels": [{"load_level": 500, "verdict": "PASS_WITH_WARNING", "warnings": ["cpu near limit", "cpu near limit"]}],
+            "scaling": {"checks": []},
+            "regression": {"checks": []},
+            "capacity": {"verdict": "PASS_WITH_WARNING", "safe_capacity": 500,
+                         "conditional_capacity": 1000, "tested_ceiling": 1000,
+                         "first_degradation_level": 1000, "notes": ["capacity conditional"]},
+        }
+        self.write_state(
+            controls={**CONTROLS_DONE, "evaluation": evaluation},
+            state=ApprovalState.AWAITING_APPROVAL,
+            evaluated=True,
+            reported=True,
+        )
+        approver = mock.Mock(return_value=types.SimpleNamespace(
+            approval_path=self.root / "approved-baseline.json",
+            record=types.SimpleNamespace(approval_record_sha256="b" * 64),
+        ))
+        deps, _, _ = make_deps(self.root, approve_baseline=approver)
+        self.assertEqual(run_main(self._argv(), deps), EXIT_OK)
+        warnings = approver.call_args.kwargs["cycle_summary"]["warnings"]
+        self.assertEqual(warnings, ["capacity conditional", "cpu near limit"])
 
     def test_approval_failure_leaves_state_unchanged(self):
         self._awaiting_state()
