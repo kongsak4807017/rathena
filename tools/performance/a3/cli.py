@@ -1,0 +1,1133 @@
+"""A3 orchestration CLI: prepare, control, run, evaluate, report, approve.
+
+argparse-only, standard library only. Every operational dependency is
+injected through :class:`CLIDependencies` so unit tests run entirely on
+fakes. Exit codes: 0 success, 2 usage/input error, 3 governance/state
+refusal, 4 operational dependency failure, 5 catastrophic abort, 10
+unexpected internal error. No timestamps, approvals, or supersessions are
+ever generated automatically.
+"""
+
+import argparse
+import dataclasses
+import hashlib
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+
+from tools.performance.a3.approval import ApprovalState, is_transition_allowed
+from tools.performance.a3.models import CapacityVerdict, MetricVerdict
+from tools.performance.a3.scaling import (
+    CapacityResult,
+    LevelAggregation,
+    RegressionResult,
+    ScalingResult,
+)
+
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_REFUSAL = 3
+EXIT_OPERATIONAL = 4
+EXIT_CATASTROPHIC = 5
+EXIT_INTERNAL = 10
+
+LOAD_LEVELS = (500, 1000, 2500, 5000)
+STATE_VERSION = 1
+DATASET_SEED = 20260802
+
+SECRET_MARKERS = (
+    "password",
+    "token",
+    "secret",
+    "api_key",
+    "private_key",
+    "authorization",
+    "bearer",
+)
+
+STATE_FIELDS = (
+    "version",
+    "state",
+    "baseline_cycle_id",
+    "manifest_id",
+    "config_path",
+    "artifact_root",
+    "controls",
+    "runs",
+    "evaluated",
+    "reported",
+    "approved",
+    "catastrophic",
+    "last_error",
+)
+
+
+class CLIError(Exception):
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+# ---------------------------------------------------------------------------
+# State model and store
+# ---------------------------------------------------------------------------
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(k): _freeze(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(v) for v in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(k): _thaw(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw(v) for v in value]
+    if isinstance(value, (ApprovalState, MetricVerdict, CapacityVerdict)):
+        return value.value
+    return value
+
+
+@dataclasses.dataclass(frozen=True)
+class CycleState:
+    version: int
+    state: ApprovalState
+    baseline_cycle_id: str
+    manifest_id: Optional[str]
+    config_path: str
+    artifact_root: str
+    controls: Mapping[str, Any]
+    runs: Tuple[Mapping[str, Any], ...]
+    evaluated: bool
+    reported: bool
+    approved: bool
+    catastrophic: bool
+    last_error: Optional[str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "state", ApprovalState(self.state))
+        object.__setattr__(self, "controls", _freeze(self.controls))
+        object.__setattr__(self, "runs", tuple(_freeze(r) for r in self.runs))
+
+
+def _state_to_dict(state: CycleState) -> Dict[str, Any]:
+    return {
+        "version": state.version,
+        "state": state.state.value,
+        "baseline_cycle_id": state.baseline_cycle_id,
+        "manifest_id": state.manifest_id,
+        "config_path": state.config_path,
+        "artifact_root": state.artifact_root,
+        "controls": _thaw(state.controls),
+        "runs": [_thaw(r) for r in state.runs],
+        "evaluated": state.evaluated,
+        "reported": state.reported,
+        "approved": state.approved,
+        "catastrophic": state.catastrophic,
+        "last_error": state.last_error,
+    }
+
+
+def _check_secret_markers(value: Any, context: str) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _check_secret_markers(str(key), context)
+            _check_secret_markers(item, context)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _check_secret_markers(item, context)
+    elif isinstance(value, str):
+        lowered = value.lower()
+        for marker in SECRET_MARKERS:
+            if marker in lowered:
+                raise CLIError(EXIT_REFUSAL, f"secret marker in {context}")
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+class CycleStateStore:
+    """Atomic, deterministic persistence for cycle-state.json."""
+
+    def __init__(self, artifact_root: Path) -> None:
+        self._root = Path(artifact_root)
+
+    def path_for(self, baseline_cycle_id: str) -> Path:
+        return (
+            self._root
+            / "artifacts"
+            / "performance"
+            / "a3"
+            / baseline_cycle_id
+            / "cycle-state.json"
+        )
+
+    def exists(self, baseline_cycle_id: str) -> bool:
+        return self.path_for(baseline_cycle_id).is_file()
+
+    def read(self, baseline_cycle_id: str) -> CycleState:
+        path = self.path_for(baseline_cycle_id)
+        if path.is_symlink():
+            raise CLIError(EXIT_REFUSAL, "cycle state file must not be a symlink")
+        if not path.is_file():
+            raise CLIError(EXIT_REFUSAL, f"cycle not found: {baseline_cycle_id}")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise CLIError(EXIT_REFUSAL, f"cycle state is malformed: {exc}") from None
+        if not isinstance(payload, dict):
+            raise CLIError(EXIT_REFUSAL, "cycle state must be an object")
+        if payload.get("version") != STATE_VERSION:
+            raise CLIError(EXIT_REFUSAL, "cycle state version must be 1")
+        unknown = sorted(set(payload) - set(STATE_FIELDS))
+        if unknown:
+            raise CLIError(EXIT_REFUSAL, f"cycle state has unknown fields: {', '.join(unknown)}")
+        try:
+            return CycleState(
+                version=payload["version"],
+                state=ApprovalState(payload["state"]),
+                baseline_cycle_id=payload["baseline_cycle_id"],
+                manifest_id=payload.get("manifest_id"),
+                config_path=payload["config_path"],
+                artifact_root=payload["artifact_root"],
+                controls=payload.get("controls", {}),
+                runs=tuple(payload.get("runs", [])),
+                evaluated=payload["evaluated"],
+                reported=payload["reported"],
+                approved=payload["approved"],
+                catastrophic=payload["catastrophic"],
+                last_error=payload.get("last_error"),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CLIError(EXIT_REFUSAL, f"cycle state is malformed: {exc}") from None
+
+    def write(self, state: CycleState) -> None:
+        if self._root.is_symlink():
+            raise CLIError(EXIT_REFUSAL, "artifact root must not be a symlink")
+        path = self.path_for(state.baseline_cycle_id)
+        if path.parent.is_symlink() or path.is_symlink():
+            raise CLIError(EXIT_REFUSAL, "cycle state path must not be a symlink")
+        payload = _state_to_dict(state)
+        _check_secret_markers(payload, "cycle state")
+        text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        _atomic_write_bytes(path, (text + "\n").encode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class CLIDependencies:
+    load_config: Optional[Callable] = None
+    capture_manifest: Optional[Callable] = None
+    verify_manifest: Optional[Callable] = None
+    build_dataset_plan: Optional[Callable] = None
+    dataset_counts: Optional[Callable] = None
+    emit_dataset_sql: Optional[Callable] = None
+    create_run_controller: Optional[Callable] = None
+    create_collector_controller: Optional[Callable] = None
+    run_harness: Optional[Callable] = None
+    run_control: Optional[Callable] = None
+    evaluate_validity: Optional[Callable] = None
+    evaluate_slos: Optional[Callable] = None
+    aggregate_level: Optional[Callable] = None
+    evaluate_scaling: Optional[Callable] = None
+    evaluate_regression: Optional[Callable] = None
+    derive_capacity: Optional[Callable] = None
+    load_previous_baseline: Optional[Callable] = None
+    load_manifest: Optional[Callable] = None
+    write_run_artifacts: Optional[Callable] = None
+    write_cycle_reports: Optional[Callable] = None
+    approve_baseline: Optional[Callable] = None
+    reject_baseline: Optional[Callable] = None
+    render_prometheus_config: Optional[Callable] = None
+    render_dashboard: Optional[Callable] = None
+    state_store: Optional[CycleStateStore] = None
+    stdout: Callable = print
+    stderr: Callable = lambda text: print(text, file=sys.stderr)
+
+
+def _require(value: Any, name: str) -> Any:
+    if value is None:
+        raise CLIError(EXIT_OPERATIONAL, f"dependency not configured: {name}")
+    return value
+
+
+def default_dependencies(artifact_root: Path) -> CLIDependencies:
+    """Wire the real Task 1-10 implementations (lazy imports)."""
+    from tools.performance.a3 import approval as approval_mod
+    from tools.performance.a3 import collectors as collectors_mod
+    from tools.performance.a3 import config as config_mod
+    from tools.performance.a3 import dataset as dataset_mod
+    from tools.performance.a3 import lifecycle as lifecycle_mod
+    from tools.performance.a3 import manifest as manifest_mod
+    from tools.performance.a3 import reporting as reporting_mod
+    from tools.performance.a3 import scaling as scaling_mod
+    from tools.performance.a3 import slo as slo_mod
+    from tools.performance.a3 import validity as validity_mod
+
+    artifact_root = Path(artifact_root)
+
+    def _counts(plan):
+        return {
+            "accounts": len(plan.accounts),
+            "characters": len(plan.characters),
+            "guilds": len(plan.guilds),
+            "parties": len(plan.parties),
+        }
+
+    def _controller(request):
+        return lifecycle_mod.RunController(
+            config=request["config"],
+            manifest=request["manifest"],
+            artifact_root=Path(request["artifact_root"]),
+        )
+
+    def _not_configured(name):
+        def _missing(*args, **kwargs):
+            raise CLIError(
+                EXIT_OPERATIONAL,
+                f"operational adapter not configured in this environment: {name}",
+            )
+
+        return _missing
+
+    def _render_prometheus(cycle, manifest_id):
+        template_path = (
+            Path(__file__).resolve().parent / "config" / "prometheus.yml"
+        )
+        text = template_path.read_text(encoding="utf-8")
+        return (
+            text.replace("${A3_BASELINE_CYCLE_ID}", cycle).replace(
+                "${A3_MANIFEST_ID}", manifest_id
+            )
+        )
+
+    def _render_dashboard(template, cycle, manifest_id, run_id):
+        return reporting_mod.render_dashboard_runtime(template, cycle, manifest_id, run_id)
+
+    return CLIDependencies(
+        load_config=config_mod.load_config,
+        capture_manifest=manifest_mod.capture_manifest,
+        verify_manifest=manifest_mod.verify_manifest,
+        build_dataset_plan=dataset_mod.build_dataset_plan,
+        dataset_counts=_counts,
+        emit_dataset_sql=dataset_mod.emit_dataset_sql,
+        create_run_controller=_controller,
+        create_collector_controller=lambda request: collectors_mod.CollectorController(),
+        run_harness=_not_configured("run_harness"),
+        run_control=_not_configured("run_control"),
+        evaluate_validity=validity_mod.validate_run,
+        evaluate_slos=slo_mod.evaluate_valid_run_slos,
+        aggregate_level=scaling_mod.aggregate_level,
+        evaluate_scaling=scaling_mod.evaluate_scaling,
+        evaluate_regression=scaling_mod.evaluate_regression,
+        derive_capacity=scaling_mod.derive_capacity,
+        load_previous_baseline=lambda: None,
+        load_manifest=lambda manifest_id: _missing_manifest(artifact_root, manifest_id),
+        write_run_artifacts=reporting_mod.write_run_artifacts,
+        write_cycle_reports=reporting_mod.write_cycle_reports,
+        approve_baseline=approval_mod.approve_baseline,
+        reject_baseline=approval_mod.reject_baseline,
+        render_prometheus_config=_render_prometheus,
+        render_dashboard=_render_dashboard,
+        state_store=CycleStateStore(artifact_root),
+    )
+
+
+def _missing_manifest(artifact_root: Path, manifest_id: str) -> dict:
+    from tools.performance.a3.io import read_json
+
+    path = (
+        Path(artifact_root)
+        / "artifacts"
+        / "performance"
+        / "a3"
+        / manifest_id
+        / "manifest.json"
+    )
+    if not path.is_file():
+        raise CLIError(EXIT_OPERATIONAL, f"manifest not found: {manifest_id}")
+    return read_json(path)
+
+
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
+
+
+def _add_common(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--artifact-root", default=".")
+    parser.add_argument("--dry-run", action="store_true")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="a3", description="A3 baseline orchestration CLI"
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    prepare = sub.add_parser("prepare")
+    prepare.add_argument("--config", required=True)
+    _add_common(prepare)
+
+    control = sub.add_parser("control")
+    control.add_argument("control_command", choices=["idle", "webgl"])
+    control.add_argument("--cycle", required=True)
+    _add_common(control)
+
+    run = sub.add_parser("run")
+    run.add_argument("--cycle", required=True)
+    run.add_argument("--users", type=int, choices=LOAD_LEVELS, required=True)
+    run.add_argument("--run", type=int, choices=(1, 2, 3), required=True)
+    _add_common(run)
+
+    evaluate = sub.add_parser("evaluate")
+    evaluate.add_argument("--cycle", required=True)
+    _add_common(evaluate)
+
+    report = sub.add_parser("report")
+    report.add_argument("--cycle", required=True)
+    _add_common(report)
+
+    approve = sub.add_parser("approve")
+    approve.add_argument("--cycle", required=True)
+    approve.add_argument("--approver", required=True)
+    approve.add_argument("--rationale", required=True)
+    approve.add_argument("--approved-utc", required=True)
+    _add_common(approve)
+
+    reject = sub.add_parser("reject")
+    reject.add_argument("--cycle", required=True)
+    reject.add_argument("--approver", required=True)
+    reject.add_argument("--rationale", required=True)
+    reject.add_argument("--rejected-utc", required=True)
+    _add_common(reject)
+
+    return parser
+
+
+# ---------------------------------------------------------------------------
+# Command helpers
+# ---------------------------------------------------------------------------
+
+
+def _validate_identifier(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise CLIError(EXIT_USAGE, f"{field} must be a non-empty string")
+    if len(value) > 128 or "\x00" in value or ".." in value:
+        raise CLIError(EXIT_USAGE, f"{field} is not a safe identifier")
+    if not all(c.isascii() and (c.isalnum() or c in ".-_") for c in value):
+        raise CLIError(EXIT_USAGE, f"{field} is not a safe identifier")
+    return value
+
+
+def _print(deps: CLIDependencies, payload: Mapping) -> None:
+    deps.stdout(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False))
+
+
+def _read_state(deps: CLIDependencies, cycle: str) -> CycleState:
+    return _require(deps.state_store, "state_store").read(cycle)
+
+
+def _write_state(deps: CLIDependencies, state: CycleState) -> None:
+    _require(deps.state_store, "state_store").write(state)
+
+
+def _controls_completed(state: CycleState) -> bool:
+    return bool(
+        state.controls.get("idle", {}).get("completed")
+        and state.controls.get("webgl", {}).get("completed")
+    )
+
+
+def _level_to_dict(level: LevelAggregation) -> Dict[str, Any]:
+    return {
+        "load_level": level.load_level,
+        "manifest_id": level.manifest_id,
+        "valid_run_count": level.valid_run_count,
+        "required_valid_run_count": level.required_valid_run_count,
+        "run_ids": list(level.run_ids),
+        "run_verdicts": [v.value for v in level.run_verdicts],
+        "verdict": level.verdict.value,
+        "median_metrics": dict(level.median_metrics),
+        "worst_metrics": dict(level.worst_metrics),
+        "stability_metrics": dict(level.stability_metrics),
+        "warnings": list(level.warnings),
+        "failures": list(level.failures),
+    }
+
+
+def _level_from_dict(data: Mapping) -> LevelAggregation:
+    return LevelAggregation(
+        load_level=data["load_level"],
+        manifest_id=data["manifest_id"],
+        valid_run_count=data["valid_run_count"],
+        required_valid_run_count=data["required_valid_run_count"],
+        run_ids=tuple(data["run_ids"]),
+        run_verdicts=tuple(MetricVerdict(v) for v in data["run_verdicts"]),
+        verdict=MetricVerdict(data["verdict"]),
+        median_metrics=data["median_metrics"],
+        worst_metrics=data["worst_metrics"],
+        stability_metrics=data["stability_metrics"],
+        warnings=tuple(data["warnings"]),
+        failures=tuple(data["failures"]),
+    )
+
+
+def _scaling_to_dict(result: ScalingResult) -> Dict[str, Any]:
+    return {
+        "passed": result.passed,
+        "first_degradation_level": result.first_degradation_level,
+        "checks": [dataclasses.asdict(c) for c in result.checks],
+    }
+
+
+def _scaling_from_dict(data: Mapping) -> ScalingResult:
+    from tools.performance.a3.scaling import ScalingCheck
+
+    return ScalingResult(
+        passed=data["passed"],
+        checks=tuple(ScalingCheck(**c) for c in data["checks"]),
+        first_degradation_level=data["first_degradation_level"],
+    )
+
+
+def _regression_to_dict(result: RegressionResult) -> Dict[str, Any]:
+    return {
+        "passed": result.passed,
+        "compared_levels": list(result.compared_levels),
+        "checks": [dataclasses.asdict(c) for c in result.checks],
+    }
+
+
+def _regression_from_dict(data: Mapping) -> RegressionResult:
+    from tools.performance.a3.scaling import RegressionCheck
+
+    return RegressionResult(
+        passed=data["passed"],
+        checks=tuple(RegressionCheck(**c) for c in data["checks"]),
+        compared_levels=tuple(data["compared_levels"]),
+    )
+
+
+def _capacity_to_dict(result: CapacityResult) -> Dict[str, Any]:
+    return {
+        "safe_capacity": result.safe_capacity,
+        "conditional_capacity": result.conditional_capacity,
+        "tested_ceiling": result.tested_ceiling,
+        "verdict": result.verdict.value,
+        "first_degradation_level": result.first_degradation_level,
+        "notes": list(result.notes),
+    }
+
+
+def _capacity_from_dict(data: Mapping) -> CapacityResult:
+    return CapacityResult(
+        safe_capacity=data["safe_capacity"],
+        conditional_capacity=data["conditional_capacity"],
+        tested_ceiling=data["tested_ceiling"],
+        verdict=CapacityVerdict(data["verdict"]),
+        first_degradation_level=data["first_degradation_level"],
+        notes=tuple(data["notes"]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+def _cmd_prepare(args, deps: CLIDependencies) -> int:
+    config = _require(deps.load_config, "load_config")(Path(args.config))
+    manifest = _require(deps.capture_manifest, "capture_manifest")(Path("."), config)
+    if manifest.get("capture_errors") or manifest.get("eligible_for_execution") is not True:
+        raise CLIError(EXIT_REFUSAL, "manifest is not eligible for execution")
+    cycle = _validate_identifier(manifest.get("manifest_id"), "baseline_cycle_id")
+    plan = _require(deps.build_dataset_plan, "build_dataset_plan")(DATASET_SEED)
+    counts = _require(deps.dataset_counts, "dataset_counts")(plan)
+
+    planned = {
+        "dataset_sql": f"artifacts/performance/a3/{cycle}/dataset/a3-dataset.sql",
+        "dataset_metadata": f"artifacts/performance/a3/{cycle}/dataset/a3-dataset.sql.metadata.json",
+        "prometheus_config": f"artifacts/performance/a3/{cycle}/prometheus.yml",
+        "grafana_dashboard": f"artifacts/performance/a3/{cycle}/grafana-dashboard.json",
+        "cycle_state": f"artifacts/performance/a3/{cycle}/cycle-state.json",
+    }
+    payload = {
+        "command": "prepare",
+        "baseline_cycle_id": cycle,
+        "config": str(args.config),
+        "manifest_id": cycle,
+        "dataset": {"seed": DATASET_SEED, "row_counts": counts},
+        "planned_paths": planned,
+        "dry_run": bool(args.dry_run),
+        "execution": "not executed (planning only)",
+    }
+    if args.dry_run:
+        _print(deps, payload)
+        return EXIT_OK
+
+    store = _require(deps.state_store, "state_store")
+    if store.exists(cycle):
+        raise CLIError(EXIT_REFUSAL, f"cycle already prepared: {cycle}")
+
+    rendered = _require(deps.render_prometheus_config, "render_prometheus_config")(cycle, cycle)
+    prometheus_path = (
+        Path(args.artifact_root) / "artifacts" / "performance" / "a3" / cycle / "prometheus.yml"
+    )
+    _atomic_write_bytes(prometheus_path, rendered.encode("utf-8"))
+
+    state = CycleState(
+        version=STATE_VERSION,
+        state=ApprovalState.DRAFT,
+        baseline_cycle_id=cycle,
+        manifest_id=cycle,
+        config_path=str(args.config),
+        artifact_root=str(args.artifact_root),
+        controls={
+            "dataset": {"seed": DATASET_SEED, "row_counts": counts},
+            "git_sha": manifest.get("source", {}).get("git_commit_sha"),
+            "planned_paths": planned,
+        },
+        runs=(),
+        evaluated=False,
+        reported=False,
+        approved=False,
+        catastrophic=False,
+        last_error=None,
+    )
+    store.write(state)
+    _print(deps, payload)
+    return EXIT_OK
+
+
+def _cmd_control(args, deps: CLIDependencies) -> int:
+    state = _read_state(deps, args.cycle)
+    if state.state is not ApprovalState.DRAFT:
+        raise CLIError(EXIT_REFUSAL, "controls are only allowed while the cycle is DRAFT")
+    name = args.control_command
+    if name == "webgl" and not state.controls.get("idle", {}).get("completed"):
+        raise CLIError(EXIT_REFUSAL, "webgl control requires a completed idle control")
+    if state.controls.get(name, {}).get("completed"):
+        raise CLIError(EXIT_REFUSAL, f"control already completed: {name}")
+    if args.dry_run:
+        _print(
+            deps,
+            {
+                "command": f"control {name}",
+                "baseline_cycle_id": state.baseline_cycle_id,
+                "duration_seconds": 600,
+                "dry_run": True,
+            },
+        )
+        return EXIT_OK
+    result = _require(deps.run_control, "run_control")(
+        name=name,
+        duration_seconds=600,
+        artifact_root=str(args.artifact_root),
+        cycle=state.baseline_cycle_id,
+    )
+    if not isinstance(result, Mapping):
+        raise CLIError(EXIT_OPERATIONAL, "control adapter returned malformed result")
+    if name == "webgl" and result.get("clients") != 20:
+        raise CLIError(EXIT_OPERATIONAL, "webgl control must observe exactly 20 clients")
+    controls = dict(state.controls)
+    controls[name] = {**result, "completed": True}
+    _write_state(deps, dataclasses.replace(state, controls=controls))
+    _print(
+        deps,
+        {
+            "command": f"control {name}",
+            "baseline_cycle_id": state.baseline_cycle_id,
+            "completed": True,
+            "dry_run": False,
+        },
+    )
+    return EXIT_OK
+
+
+def _valid_runs_at(state: CycleState, level: int) -> int:
+    return sum(
+        1
+        for entry in state.runs
+        if entry["load_level"] == level and entry["valid"]
+    )
+
+
+def _cmd_run(args, deps: CLIDependencies) -> int:
+    state = _read_state(deps, args.cycle)
+    if state.catastrophic:
+        raise CLIError(EXIT_REFUSAL, "cycle is catastrophic; no further runs allowed")
+    if state.state is not ApprovalState.DRAFT:
+        raise CLIError(EXIT_REFUSAL, "runs are only allowed while the cycle is DRAFT")
+    if not _controls_completed(state):
+        raise CLIError(EXIT_REFUSAL, "both controls must complete before benchmark runs")
+    for level in LOAD_LEVELS:
+        if level >= args.users:
+            break
+        if _valid_runs_at(state, level) != 3:
+            raise CLIError(
+                EXIT_REFUSAL,
+                f"level {level} requires exactly three valid runs before level {args.users}",
+            )
+
+    base_id = f"run-l{args.users}-n{args.run}"
+    same_base = [e for e in state.runs if e["run_id"] == base_id or e["run_id"].startswith(base_id + "-r")]
+    if any(e["run_id"] == base_id and e["valid"] for e in same_base):
+        raise CLIError(EXIT_REFUSAL, f"run identity already finalized: {base_id}")
+    run_id = base_id
+    if same_base:
+        run_id = f"{base_id}-r{len(same_base) + 1}"
+
+    drift = _require(deps.verify_manifest, "verify_manifest")(
+        {"manifest_id": state.manifest_id}, {}
+    )
+    if drift:
+        raise CLIError(EXIT_REFUSAL, "runtime manifest drift detected")
+
+    if args.dry_run:
+        _print(
+            deps,
+            {
+                "command": "run",
+                "baseline_cycle_id": state.baseline_cycle_id,
+                "users": args.users,
+                "run_number": args.run,
+                "run_id": run_id,
+                "phases": [
+                    "ENVIRONMENT_CHECK",
+                    "SERVICE_START",
+                    "PRECONDITIONING",
+                    "RAMP_UP",
+                    "STEADY_STATE",
+                    "COOL_DOWN",
+                    "VALIDATION",
+                    "REPORTING",
+                ],
+                "planned_artifacts": f"artifacts/performance/a3/{state.baseline_cycle_id}/runs/{run_id}/",
+                "dry_run": True,
+            },
+        )
+        return EXIT_OK
+
+    request = {
+        "config": None,
+        "manifest": {"manifest_id": state.manifest_id},
+        "artifact_root": str(args.artifact_root),
+        "baseline_cycle_id": state.baseline_cycle_id,
+        "run_id": run_id,
+        "load_level": args.users,
+        "run_number": args.run,
+    }
+    controller = _require(deps.create_run_controller, "create_run_controller")(request)
+
+    controller.run_preflight()
+    controller.run_service_start(())
+    collectors = _require(deps.create_collector_controller, "create_collector_controller")(request)
+    collectors.start(request)
+    try:
+        harness = _require(deps.run_harness, "run_harness")(request)
+    except Exception as exc:
+        try:
+            controller.abort(str(exc), catastrophic=True)
+        finally:
+            collectors.stop()
+        raise CLIError(EXIT_OPERATIONAL, f"workload harness failed: {exc}") from None
+    controller.run_preconditioning()
+    controller.run_ramp_up()
+    controller.run_steady_state()
+    controller.run_cooldown()
+    collectors.stop()
+    controller.run_validation()
+    controller.run_reporting()
+
+    validity = _require(deps.evaluate_validity, "evaluate_validity")(harness["run_data"])
+    slo_result = None
+    if validity.valid:
+        slo_result = _require(deps.evaluate_slos, "evaluate_slos")(validity, harness["metric_bundle"], None)
+    artifacts = _require(deps.write_run_artifacts, "write_run_artifacts")(
+        artifact_root=Path(args.artifact_root),
+        baseline_cycle_id=state.baseline_cycle_id,
+        run_id=run_id,
+        harness=harness,
+        validity=validity,
+        slo_result=slo_result,
+    )
+
+    catastrophic = bool(harness.get("catastrophic")) or bool(
+        slo_result is not None and slo_result.catastrophic_signals
+    )
+    verdict = slo_result.status.value if slo_result is not None else "BLOCKED"
+    entry = {
+        "run_id": run_id,
+        "load_level": args.users,
+        "run_number": args.run,
+        "valid": bool(validity.valid),
+        "verdict": verdict,
+        "manifest_id": state.manifest_id,
+        "catastrophic": catastrophic,
+        "metrics": harness.get("metrics", {}),
+    }
+    runs = tuple(state.runs) + (entry,)
+    new_state = dataclasses.replace(
+        state,
+        runs=runs,
+        catastrophic=catastrophic or state.catastrophic,
+        last_error=None,
+    )
+    _write_state(deps, new_state)
+    _print(
+        deps,
+        {
+            "command": "run",
+            "baseline_cycle_id": state.baseline_cycle_id,
+            "run_id": run_id,
+            "valid": bool(validity.valid),
+            "verdict": verdict,
+            "catastrophic": catastrophic,
+            "artifacts": artifacts if isinstance(artifacts, Mapping) else {"complete": True},
+            "dry_run": False,
+        },
+    )
+    if catastrophic:
+        return EXIT_CATASTROPHIC
+    return EXIT_OK
+
+
+def _cmd_evaluate(args, deps: CLIDependencies) -> int:
+    state = _read_state(deps, args.cycle)
+    if state.catastrophic:
+        raise CLIError(EXIT_REFUSAL, "catastrophic cycle cannot be evaluated as normal")
+    if state.state is not ApprovalState.DRAFT:
+        raise CLIError(EXIT_REFUSAL, "evaluation requires DRAFT state")
+    if not _controls_completed(state):
+        raise CLIError(EXIT_REFUSAL, "controls must complete before evaluation")
+
+    manifests = {entry["manifest_id"] for entry in state.runs}
+    if len(manifests) > 1:
+        raise CLIError(EXIT_REFUSAL, "mixed manifest IDs across runs")
+    levels_present = sorted({entry["load_level"] for entry in state.runs})
+    if not levels_present:
+        raise CLIError(EXIT_REFUSAL, "no runs recorded for evaluation")
+    for level in levels_present:
+        if _valid_runs_at(state, level) != 3:
+            raise CLIError(
+                EXIT_REFUSAL,
+                f"level {level} has {_valid_runs_at(state, level)} valid runs; exactly three required",
+            )
+
+    from tools.performance.a3.scaling import RunSummary
+
+    aggregations = []
+    for level in levels_present:
+        summaries = [
+            RunSummary(
+                run_id=entry["run_id"],
+                manifest_id=entry["manifest_id"],
+                load_level=entry["load_level"],
+                run_number=entry["run_number"],
+                valid=entry["valid"],
+                verdict=MetricVerdict(entry["verdict"]),
+                metrics=entry["metrics"],
+                catastrophic=entry.get("catastrophic", False),
+            )
+            for entry in state.runs
+            if entry["load_level"] == level and entry["valid"]
+        ]
+        aggregations.append(_require(deps.aggregate_level, "aggregate_level")(summaries))
+
+    scaling = _require(deps.evaluate_scaling, "evaluate_scaling")(aggregations)
+    previous = _require(deps.load_previous_baseline, "load_previous_baseline")()
+    regression = _require(deps.evaluate_regression, "evaluate_regression")(aggregations, previous)
+    capacity = _require(deps.derive_capacity, "derive_capacity")(aggregations)
+
+    evaluation = {
+        "levels": [_level_to_dict(level) for level in aggregations],
+        "scaling": _scaling_to_dict(scaling),
+        "regression": _regression_to_dict(regression),
+        "capacity": _capacity_to_dict(capacity),
+    }
+    controls = dict(state.controls)
+    controls["evaluation"] = evaluation
+    controls["ci"] = {"evaluated": True, "status": "success"}
+    if not is_transition_allowed(state.state, ApprovalState.CI_EVALUATED):
+        raise CLIError(EXIT_REFUSAL, "illegal state transition to CI_EVALUATED")
+    new_state = dataclasses.replace(
+        state,
+        state=ApprovalState.CI_EVALUATED,
+        controls=controls,
+        evaluated=True,
+    )
+    _write_state(deps, new_state)
+    _print(
+        deps,
+        {
+            "command": "evaluate",
+            "baseline_cycle_id": state.baseline_cycle_id,
+            "state": ApprovalState.CI_EVALUATED.value,
+            "levels": [level["load_level"] for level in evaluation["levels"]],
+            "capacity": evaluation["capacity"],
+            "dry_run": bool(args.dry_run),
+        },
+    )
+    return EXIT_OK
+
+
+def _cmd_report(args, deps: CLIDependencies) -> int:
+    state = _read_state(deps, args.cycle)
+    if not state.evaluated or state.state is not ApprovalState.CI_EVALUATED:
+        raise CLIError(EXIT_REFUSAL, "report requires a completed evaluation")
+    if state.reported:
+        raise CLIError(EXIT_REFUSAL, "report already finalized for this cycle")
+    evaluation = state.controls.get("evaluation")
+    if not isinstance(evaluation, Mapping):
+        raise CLIError(EXIT_REFUSAL, "evaluation results missing from cycle state")
+
+    level_results = [_level_from_dict(item) for item in evaluation["levels"]]
+    scaling = _scaling_from_dict(evaluation["scaling"])
+    regression = _regression_from_dict(evaluation["regression"])
+    capacity = _capacity_from_dict(evaluation["capacity"])
+    manifest = _require(deps.load_manifest, "load_manifest")(state.manifest_id)
+
+    bottleneck = None
+    for check in scaling.checks:
+        if not check.passed and check.metric:
+            bottleneck = check.metric
+            break
+    report_controls = {
+        "idle": dict(state.controls.get("idle", {})),
+        "webgl": dict(state.controls.get("webgl", {})),
+        "primary_bottleneck": bottleneck,
+        "run_checksums": {},
+        "run_numbers": {},
+        "dashboard_run_id": state.runs[0]["run_id"] if state.runs else "cycle",
+    }
+    result = _require(deps.write_cycle_reports, "write_cycle_reports")(
+        artifact_root=Path(args.artifact_root),
+        baseline_cycle_id=state.baseline_cycle_id,
+        manifest=manifest,
+        level_results=level_results,
+        scaling_result=scaling,
+        regression_result=regression,
+        capacity_result=capacity,
+        controls=report_controls,
+        dataset_summary=state.controls.get("dataset", {}),
+        anomalies=[],
+        recommendations={"remediation": [], "a5": []},
+    )
+    cycle_dir = (
+        Path(args.artifact_root) / "artifacts" / "performance" / "a3" / state.baseline_cycle_id
+    )
+    checksums = cycle_dir / "checksums.json"
+    if not checksums.is_file() or not getattr(result, "files", None):
+        raise CLIError(EXIT_OPERATIONAL, "cycle report checksum verification failed")
+
+    if not is_transition_allowed(state.state, ApprovalState.AWAITING_APPROVAL):
+        raise CLIError(EXIT_REFUSAL, "illegal state transition to AWAITING_APPROVAL")
+    controls = dict(state.controls)
+    controls["report"] = {
+        "technical_report": str(result.technical_report_path),
+        "executive_summary": str(result.executive_summary_path),
+        "comparison_csv": str(result.comparison_csv_path),
+        "artifact_index": str(result.artifact_index_path),
+    }
+    new_state = dataclasses.replace(
+        state,
+        state=ApprovalState.AWAITING_APPROVAL,
+        controls=controls,
+        reported=True,
+    )
+    _write_state(deps, new_state)
+    _print(
+        deps,
+        {
+            "command": "report",
+            "baseline_cycle_id": state.baseline_cycle_id,
+            "state": ApprovalState.AWAITING_APPROVAL.value,
+            "technical_report": str(result.technical_report_path),
+            "executive_summary": str(result.executive_summary_path),
+            "comparison_csv": str(result.comparison_csv_path),
+            "artifact_index": str(result.artifact_index_path),
+            "approval": "not approved (report only)",
+            "dry_run": bool(args.dry_run),
+        },
+    )
+    return EXIT_OK
+
+
+def _approval_summary(args, deps: CLIDependencies, state: CycleState) -> Dict[str, Any]:
+    controls = state.controls
+    if "cycle_summary" in controls:
+        summary = dict(controls["cycle_summary"])
+    else:
+        evaluation = controls.get("evaluation", {})
+        capacity = evaluation.get("capacity", {})
+        summary = {
+            "capacity": {
+                "verdict": capacity.get("verdict"),
+                "safe_capacity": capacity.get("safe_capacity"),
+                "conditional_capacity": capacity.get("conditional_capacity"),
+                "tested_ceiling": capacity.get("tested_ceiling"),
+                "first_degradation_level": capacity.get("first_degradation_level"),
+                "notes": capacity.get("notes", []),
+            },
+            "levels": {
+                str(item["load_level"]): {"verdict": item["verdict"]}
+                for item in evaluation.get("levels", [])
+            },
+            "warnings": [],
+            "git_sha": controls.get("git_sha"),
+            "report_checksums_sha256": None,
+        }
+    checksums = (
+        Path(args.artifact_root)
+        / "artifacts"
+        / "performance"
+        / "a3"
+        / state.baseline_cycle_id
+        / "checksums.json"
+    )
+    if summary.get("report_checksums_sha256") is None and checksums.is_file():
+        summary["report_checksums_sha256"] = hashlib.sha256(
+            checksums.read_bytes()
+        ).hexdigest()
+    summary["state"] = ApprovalState.AWAITING_APPROVAL.value
+    summary["baseline_cycle_id"] = state.baseline_cycle_id
+    summary["manifest_id"] = state.manifest_id
+    summary["ci"] = {"evaluated": True, "status": "success"}
+    return summary
+
+
+def _cmd_approve(args, deps: CLIDependencies) -> int:
+    state = _read_state(deps, args.cycle)
+    if state.approved or state.state is ApprovalState.APPROVED:
+        raise CLIError(EXIT_REFUSAL, "cycle already approved")
+    if state.state is not ApprovalState.AWAITING_APPROVAL or not state.reported or not state.evaluated:
+        raise CLIError(EXIT_REFUSAL, "approval requires AWAITING_APPROVAL with a completed report")
+    summary = _approval_summary(args, deps, state)
+    result = _require(deps.approve_baseline, "approve_baseline")(
+        artifact_root=Path(args.artifact_root),
+        cycle_summary=summary,
+        approver=args.approver,
+        rationale=args.rationale,
+        approved_utc=args.approved_utc,
+    )
+    if not is_transition_allowed(state.state, ApprovalState.APPROVED):
+        raise CLIError(EXIT_REFUSAL, "illegal state transition to APPROVED")
+    new_state = dataclasses.replace(
+        state, state=ApprovalState.APPROVED, approved=True
+    )
+    _write_state(deps, new_state)
+    _print(
+        deps,
+        {
+            "command": "approve",
+            "baseline_cycle_id": state.baseline_cycle_id,
+            "state": ApprovalState.APPROVED.value,
+            "approval_path": str(result.approval_path),
+            "approval_record_sha256": result.record.approval_record_sha256,
+            "dry_run": bool(args.dry_run),
+        },
+    )
+    return EXIT_OK
+
+
+def _cmd_reject(args, deps: CLIDependencies) -> int:
+    state = _read_state(deps, args.cycle)
+    if state.state is not ApprovalState.AWAITING_APPROVAL or not state.reported:
+        raise CLIError(EXIT_REFUSAL, "rejection requires AWAITING_APPROVAL with a completed report")
+    summary = _approval_summary(args, deps, state)
+    result = _require(deps.reject_baseline, "reject_baseline")(
+        artifact_root=Path(args.artifact_root),
+        cycle_summary=summary,
+        approver=args.approver,
+        rationale=args.rationale,
+        rejected_utc=args.rejected_utc,
+    )
+    if not is_transition_allowed(state.state, ApprovalState.REJECTED):
+        raise CLIError(EXIT_REFUSAL, "illegal state transition to REJECTED")
+    new_state = dataclasses.replace(state, state=ApprovalState.REJECTED)
+    _write_state(deps, new_state)
+    _print(
+        deps,
+        {
+            "command": "reject",
+            "baseline_cycle_id": state.baseline_cycle_id,
+            "state": ApprovalState.REJECTED.value,
+            "approval_path": str(result.approval_path),
+            "dry_run": bool(args.dry_run),
+        },
+    )
+    return EXIT_OK
+
+
+_HANDLERS = {
+    "prepare": _cmd_prepare,
+    "control": _cmd_control,
+    "run": _cmd_run,
+    "evaluate": _cmd_evaluate,
+    "report": _cmd_report,
+    "approve": _cmd_approve,
+    "reject": _cmd_reject,
+}
+
+
+def dispatch(args: argparse.Namespace, dependencies: Optional[CLIDependencies] = None) -> int:
+    deps = dependencies or default_dependencies(Path(args.artifact_root))
+    handler = _HANDLERS.get(args.command)
+    if handler is None:
+        raise CLIError(EXIT_USAGE, f"unknown command: {args.command}")
+    return handler(args, deps)
+
+
+def main(argv: Optional[Sequence[str]] = None, dependencies: Optional[CLIDependencies] = None) -> int:
+    parser = build_parser()
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else EXIT_USAGE
+
+    stderr = dependencies.stderr if dependencies is not None else (
+        lambda text: print(text, file=sys.stderr)
+    )
+    try:
+        return dispatch(args, dependencies)
+    except CLIError as exc:
+        stderr(exc.message)
+        return exc.code
+    except ValueError as exc:
+        stderr(str(exc))
+        return EXIT_USAGE
+    except Exception as exc:  # noqa: BLE001 - mapped exit code, no stack trace
+        stderr(f"internal error: {type(exc).__name__}: {exc}")
+        return EXIT_INTERNAL
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -24,8 +24,20 @@ __all__ = [
     "MetricVerdict",
     "RunPhase",
     "RunStatus",
+    "build_parser",
     "load_config",
+    "main",
     "read_json",
     "sha256_file",
     "write_json_atomic",
 ]
+
+
+def __getattr__(name):
+    # Lazy CLI entry points: avoid importing the orchestration module (and
+    # its operational dependencies) unless they are actually used.
+    if name in ("main", "build_parser"):
+        from tools.performance.a3.cli import build_parser, main
+
+        return {"main": main, "build_parser": build_parser}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
